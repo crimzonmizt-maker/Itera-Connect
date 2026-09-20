@@ -1,0 +1,588 @@
+import React, { useState } from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { addDays, money, newId, shortDate } from '../model/format';
+import type { EventKind, Id, Item, NewEvent, ProjectMember } from '../model/types';
+import { audienceLabel, defaultAudience, homeownerIds } from '../model/visibility';
+import { ConciergePanel } from '../ui/ConciergePanel';
+import { ItemsTable } from '../ui/ItemsTable';
+import { useFocusRouter } from '../ui/FocusContext';
+import {
+  Badge,
+  Button,
+  Card,
+  Field,
+  Muted,
+  Row,
+  SectionTitle,
+  TabPane,
+  Tabs,
+} from '../ui/primitives';
+import { ProgressBar } from '../ui/ProgressBar';
+import { kindGlyph, radius, space, type, type Palette } from '../ui/theme';
+import { useStyles, useTheme } from '../ui/ThemeContext';
+import { Timeline } from '../ui/Timeline';
+import { ItemForm } from './ItemForm';
+import { ProjectHeader } from './ProjectHeader';
+import type { ProjectState } from './useProject';
+
+type Tab = 'overview' | 'selections';
+
+export function ContractorHome({ state }: { state: ProjectState }) {
+  const {
+    project,
+    events,
+    items,
+    members,
+    viewer,
+    progress,
+    suggestions,
+    approvals,
+    post,
+    reply,
+    decide,
+    invite,
+    saveItem,
+    now,
+  } = state;
+  const [tab, setTab] = useState<Tab>('overview');
+  const [editing, setEditing] = useState<Item | 'new' | undefined>();
+  const [asking, setAsking] = useState<Item>();
+  // A jump to an item lives on the Selections tab; everything else on Overview.
+  useFocusRouter((key) => setTab(key.startsWith('item:') ? 'selections' : 'overview'));
+  if (!project || !viewer) return null;
+  const openCount = approvals.filter((a) => a.decision !== 'approved').length;
+
+  return (
+    <View style={{ gap: space.sm }}>
+      <ProjectHeader
+        project={project}
+        members={members}
+        viewer={viewer}
+        now={now}
+        onInvite={invite}
+      />
+
+      <View style={{ marginTop: space.md }}>
+        <Tabs<Tab>
+          tabs={[
+            { value: 'overview', label: 'Overview', count: suggestions.active.length },
+            { value: 'selections', label: 'Selections & materials', count: items.length },
+          ]}
+          value={tab}
+          onChange={setTab}
+        />
+      </View>
+
+      {/* Both panes stay mounted (see TabPane), so a tab switch keeps form and pager state. */}
+      <TabPane active={tab === 'overview'}>
+        <SectionTitle hint="Start, Update or Done — each goes on the record and the homeowner sees it">
+          Progress
+        </SectionTitle>
+        <Card>
+          <ProgressBar
+            progress={progress}
+            onAdvance={(m, status, body) =>
+              post({
+                projectId: project.id,
+                kind: 'milestone',
+                title: m.title,
+                status,
+                due: m.due,
+                body,
+                audience: homeownerIds(members),
+              })
+            }
+          />
+        </Card>
+
+        <SectionTitle
+          hint={`${suggestions.active.length} to look at${
+            openCount ? ` · ${openCount} approval${openCount === 1 ? '' : 's'} open` : ''
+          }${suggestions.archived.length ? ` · ${suggestions.archived.length} set aside` : ''}`}
+        >
+          Concierge
+        </SectionTitle>
+        <ConciergePanel
+          active={suggestions.active}
+          archived={suggestions.archived}
+          members={members}
+          authorName={viewer.displayName.split(' ')[0] ?? viewer.displayName}
+          projectId={project.id}
+          now={now}
+          onPost={post}
+        />
+
+        <SectionTitle hint="Anything you post here goes on the record. Pick who sees it; nobody else can.">
+          Post an update
+        </SectionTitle>
+        {/* Keyed on membership so the audience default is rebuilt if a homeowner joins. */}
+        <Compose
+          key={members.map((m) => m.userId).join(',')}
+          projectId={project.id}
+          members={members}
+          onPost={post}
+        />
+
+        <SectionTitle hint="Every note, delivery and decision, newest first">Timeline</SectionTitle>
+        <Timeline
+          events={events}
+          items={items}
+          members={members}
+          viewerRole="contractor"
+          onReply={reply}
+          onDecide={decide}
+          onReschedule={(job, newDate) =>
+            post({
+              projectId: project.id,
+              kind: 'schedule',
+              title: job.title,
+              date: newDate,
+              who: job.who,
+              needs: job.needs,
+              audience: job.audience,
+              body: `Moved from ${shortDate(job.date)}.`,
+            })
+          }
+          approvals={approvals}
+        />
+      </TabPane>
+
+      <TabPane active={tab === 'selections'}>
+        <SectionTitle hint="Sourcing goes to whoever has to buy the item. Anything marked “Your business only” is never shown to the homeowner.">
+          Selections &amp; materials
+        </SectionTitle>
+        {editing ? (
+          <ItemForm
+            key={editing === 'new' ? 'new' : editing.id}
+            project={project}
+            members={members}
+            initial={editing === 'new' ? undefined : editing}
+            onSave={async ({ item, order, delivery }) => {
+              const saved = await saveItem(item);
+              // A status change to ordered / delivered goes on the record as an entry, so the
+              // expected date and the count are visible to everyone and checkable by the concierge.
+              const shared = homeownerIds(members);
+              if (order)
+                await post({
+                  projectId: project.id,
+                  kind: 'order',
+                  itemId: saved.id,
+                  expectedDate: order.expectedDate,
+                  audience: shared,
+                  refs: [{ kind: 'item', id: saved.id, label: saved.name }],
+                });
+              if (delivery)
+                await post({
+                  projectId: project.id,
+                  kind: 'delivery',
+                  itemId: saved.id,
+                  ...delivery,
+                  // Short or damaged deliveries start as the business's problem to chase.
+                  audience: delivery.received - delivery.damaged >= delivery.expected ? shared : [],
+                  refs: [{ kind: 'item', id: saved.id, label: saved.name }],
+                });
+              setEditing(undefined);
+            }}
+            onCancel={() => setEditing(undefined)}
+          />
+        ) : asking ? (
+          <AskApproval
+            item={asking}
+            members={members}
+            round={(approvals.find((a) => a.itemId === asking.id)?.round ?? 0) + 1}
+            existingApprovalId={approvals.find((a) => a.itemId === asking.id)?.approvalId}
+            onPost={async (e) => {
+              await post(e);
+              setAsking(undefined);
+            }}
+            onCancel={() => setAsking(undefined)}
+          />
+        ) : (
+          <Row>
+            <Button
+              title="Add item"
+              glyph="＋"
+              kind="secondary"
+              onPress={() => setEditing('new')}
+            />
+          </Row>
+        )}
+        <ItemsTable
+          items={items}
+          events={events}
+          approvals={approvals}
+          project={project}
+          viewerRole="contractor"
+          now={now}
+          onEdit={(item) => {
+            setAsking(undefined);
+            setEditing(item);
+          }}
+          onRequestApproval={(item) => {
+            setEditing(undefined);
+            setAsking(item);
+          }}
+        />
+      </TabPane>
+    </View>
+  );
+}
+
+const kinds: EventKind[] = ['note', 'milestone', 'schedule', 'photo', 'document_sent'];
+
+function Compose({
+  projectId,
+  members,
+  onPost,
+}: {
+  projectId: string;
+  members: ProjectMember[];
+  onPost: (e: NewEvent) => Promise<void>;
+}) {
+  const { palette: p, tones } = useTheme();
+  const styles = useStyles(makeStyles);
+  const [kind, setKind] = useState<EventKind>('note');
+  const [audience, setAudience] = useState<Id[]>(() => defaultAudience('note', members));
+  const [body, setBody] = useState('');
+  const [title, setTitle] = useState('');
+  const [days, setDays] = useState('7');
+  const [to, setTo] = useState('');
+  const [layers, setLayers] = useState('');
+  const [busy, setBusy] = useState(false);
+  const homeowners = members.filter((m) => m.role === 'homeowner');
+
+  const pick = (k: EventKind) => {
+    setKind(k);
+    setAudience(defaultAudience(k, members));
+    if (k === 'document_sent' && !to) setTo(homeowners[0]?.email ?? '');
+  };
+  const toggle = (id: Id) =>
+    setAudience((a) => (a.includes(id) ? a.filter((x) => x !== id) : [...a, id]));
+
+  const valid =
+    kind === 'note' || kind === 'photo'
+      ? body.trim().length > 0
+      : kind === 'document_sent'
+        ? title.trim().length > 0 && to.trim().length > 0
+        : title.trim().length > 0;
+
+  const submit = async () => {
+    setBusy(true);
+    const base = { projectId, audience, body: body.trim() || undefined };
+    let event: NewEvent;
+    switch (kind) {
+      case 'milestone':
+        event = { ...base, kind, title: title.trim(), status: 'done' };
+        break;
+      case 'schedule':
+        event = {
+          ...base,
+          kind,
+          title: title.trim(),
+          date: addDays(new Date().toISOString(), Number(days) || 0),
+        };
+        break;
+      case 'photo':
+        event = { ...base, kind, uri: 'sample://photo', caption: body.trim() };
+        break;
+      case 'document_sent':
+        event = {
+          ...base,
+          kind,
+          title: title.trim(),
+          via: 'email',
+          to: to.trim(),
+          layers: layers
+            .split(',')
+            .map((l) => l.trim())
+            .filter(Boolean),
+        };
+        break;
+      default:
+        event = { ...base, kind: 'note' };
+    }
+    try {
+      await onPost(event);
+      // Back to a blank Note addressed to the default audience — the previous post's kind,
+      // date and recipients must not leak into the next one.
+      setBody('');
+      setTitle('');
+      setLayers('');
+      setTo('');
+      setDays('7');
+      setKind('note');
+      setAudience(defaultAudience('note', members));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card>
+      <Row wrap>
+        {kinds.map((k) => (
+          <Pressable
+            key={k}
+            accessibilityRole="button"
+            accessibilityState={{ selected: kind === k }}
+            aria-selected={kind === k}
+            onPress={() => pick(k)}
+            style={[styles.chip, kind === k && styles.chipOn]}
+          >
+            <Text style={[styles.chipText, kind === k && { color: p.onAccent }]}>
+              {kindGlyph[k].glyph} {kindGlyph[k].label}
+            </Text>
+          </Pressable>
+        ))}
+      </Row>
+      {kind === 'milestone' || kind === 'schedule' || kind === 'document_sent' ? (
+        <Field
+          label={
+            kind === 'milestone'
+              ? 'Milestone finished'
+              : kind === 'schedule'
+                ? 'What is scheduled'
+                : 'Document title'
+          }
+          value={title}
+          onChangeText={setTitle}
+          placeholder={
+            kind === 'milestone'
+              ? 'e.g. Tile floor & walls'
+              : kind === 'schedule'
+                ? 'e.g. Plumber final connections'
+                : 'e.g. Bath quote v2 — labor only'
+          }
+        />
+      ) : null}
+      {kind === 'schedule' ? (
+        <Field
+          label="In how many days"
+          value={days}
+          onChangeText={setDays}
+          keyboardType="number-pad"
+        />
+      ) : null}
+      {kind === 'document_sent' ? (
+        <>
+          <Field
+            label="Sent by e-mail to"
+            value={to}
+            onChangeText={setTo}
+            autoCapitalize="none"
+            keyboardType="email-address"
+            placeholder="name@example.com"
+          />
+          <Field
+            label="Layers included (comma-separated)"
+            value={layers}
+            onChangeText={setLayers}
+            placeholder="e.g. layout, dimensions — leave blank if not a drawing"
+          />
+        </>
+      ) : null}
+      <Field
+        label={kind === 'photo' ? 'Caption' : 'Details'}
+        value={body}
+        onChangeText={setBody}
+        multiline
+        placeholder={
+          kind === 'note' ? 'What happened, or what you want the homeowner to know' : 'Optional'
+        }
+      />
+
+      <View style={{ gap: space.xs }}>
+        <Text style={styles.label}>Who sees this</Text>
+        <Row wrap>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ selected: audience.length === 0 }}
+            aria-selected={audience.length === 0}
+            onPress={() => setAudience([])}
+          >
+            <Badge
+              tone={tones.audience.team}
+              text={audience.length === 0 ? 'Your business only ✓' : 'Your business only'}
+            />
+          </Pressable>
+          {homeowners.map((h) => {
+            const on = audience.includes(h.userId);
+            return (
+              <Pressable
+                key={h.userId}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: on }}
+                aria-checked={on}
+                onPress={() => toggle(h.userId)}
+              >
+                <Badge
+                  tone={
+                    on
+                      ? tones.audience.shared
+                      : { ...tones.audience.shared, bg: p.panel, fg: p.ink3 }
+                  }
+                  text={`${h.displayName.split(' ')[0]}${on ? ' ✓' : ''}`}
+                />
+              </Pressable>
+            );
+          })}
+          {homeowners.length > 1 ? (
+            <Button
+              title="Everyone"
+              kind="quiet"
+              onPress={() => setAudience(homeownerIds(members))}
+            />
+          ) : null}
+        </Row>
+        <Muted>{audienceLabel(audience, members)}</Muted>
+      </View>
+
+      <Row style={{ justifyContent: 'flex-end' }}>
+        <Button title="Post" glyph="↑" onPress={submit} disabled={busy || !valid} />
+      </Row>
+    </Card>
+  );
+}
+
+/**
+ * Ask the homeowner(s) to approve an item. Re-using the approvalId after "request changes" is
+ * what makes it a revised round of the same question rather than a new one.
+ */
+function AskApproval({
+  item,
+  members,
+  round,
+  existingApprovalId,
+  onPost,
+  onCancel,
+}: {
+  item: Item;
+  members: ProjectMember[];
+  round: number;
+  existingApprovalId?: Id;
+  onPost: (e: NewEvent) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const styles = useStyles(makeStyles);
+  const [question, setQuestion] = useState(item.name);
+  const [body, setBody] = useState('');
+  const [days, setDays] = useState('7');
+  const [audience, setAudience] = useState<Id[]>(() => homeownerIds(members));
+  const [busy, setBusy] = useState(false);
+  const homeowners = members.filter((m) => m.role === 'homeowner');
+  const toggle = (id: Id) =>
+    setAudience((a) => (a.includes(id) ? a.filter((x) => x !== id) : [...a, id]));
+  const valid = question.trim().length > 0 && audience.length > 0;
+  return (
+    <Card style={{ gap: space.md }}>
+      <Text style={styles.h2}>
+        {round > 1
+          ? `Ask again about ${item.name} (round ${round})`
+          : `Ask for approval: ${item.name}`}
+      </Text>
+      <Field
+        label="What are you asking them to approve?"
+        value={question}
+        onChangeText={setQuestion}
+        placeholder="e.g. Grout colour for the floor tile: Warm Gray"
+      />
+      <Field
+        label="Details — say where it goes and what the choice is"
+        value={body}
+        onChangeText={setBody}
+        multiline
+        placeholder="e.g. For the joints in the floor tile. Warm Gray hides dirt; Bright White matches the walls."
+      />
+      <View style={{ width: 200 }}>
+        <Field
+          label="Decide within (days)"
+          value={days}
+          onChangeText={setDays}
+          keyboardType="number-pad"
+        />
+      </View>
+      <View style={{ gap: space.xs }}>
+        <Text style={styles.label}>Who decides</Text>
+        <Row wrap>
+          {homeowners.map((h) => {
+            const on = audience.includes(h.userId);
+            return (
+              <Pressable
+                key={h.userId}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: on }}
+                aria-checked={on}
+                onPress={() => toggle(h.userId)}
+                style={[styles.chip, on && styles.chipOn]}
+              >
+                <Text style={[styles.chipText, on && styles.chipTextOn]}>
+                  {h.displayName.split(' ')[0]}
+                  {on ? ' ✓' : ''}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </Row>
+      </View>
+      <Muted>
+        {item.clientPrice !== undefined ? `Amount shown: ${money(item.clientPrice)}. ` : ''}
+        The item shows as “Proposed” until they answer.
+      </Muted>
+      <Row wrap style={{ justifyContent: 'flex-end' }}>
+        <Button title="Cancel" kind="quiet" onPress={onCancel} />
+        <Button
+          title={round > 1 ? 'Send revised request' : 'Send request'}
+          glyph="?"
+          disabled={busy || !valid}
+          onPress={async () => {
+            setBusy(true);
+            try {
+              await onPost({
+                projectId: item.projectId,
+                kind: 'approval_requested',
+                approvalId: existingApprovalId ?? newId('appr'),
+                title: question.trim(),
+                dueBy: addDays(new Date().toISOString(), Number(days) || 7),
+                amount: item.clientPrice,
+                itemId: item.id,
+                audience,
+                body: body.trim() || undefined,
+                refs: [{ kind: 'item', id: item.id, label: item.name }],
+              });
+            } finally {
+              setBusy(false);
+            }
+          }}
+        />
+      </Row>
+    </Card>
+  );
+}
+
+const makeStyles = (p: Palette) =>
+  StyleSheet.create({
+    h1: { ...type.h1, color: p.ink },
+    label: { ...type.label, color: p.ink3 },
+    h2: { ...type.h2, color: p.ink },
+    chipTextOn: { color: p.onAccent },
+    chip: {
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderRadius: radius.pill,
+      backgroundColor: p.panelAlt,
+      minHeight: 36,
+      justifyContent: 'center',
+    },
+    chipOn: { backgroundColor: p.accent },
+    chipText: { ...type.small, fontWeight: '600', color: p.ink2 },
+    code: {
+      backgroundColor: p.accentSoft,
+      borderRadius: radius.md,
+      padding: space.lg,
+      gap: 4,
+      alignItems: 'flex-start',
+    },
+    codeLabel: { ...type.label, color: p.ink3 },
+    codeText: { ...type.h1, fontFamily: 'Menlo', letterSpacing: 2, color: p.accent },
+    error: { ...type.small, color: p.amber, fontWeight: '600' },
+  });

@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "Itera Connect",
+    "slug": "itera-connect",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "scheme": "iteraconnect",
+    "ios": { "supportsTablet": true, "bundleIdentifier": "com.itera.connect" },
+    "android": { "package": "com.itera.connect" },
+    "web": { "output": "single" }
+  }
+}

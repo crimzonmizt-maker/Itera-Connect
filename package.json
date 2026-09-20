@@ -1,0 +1,43 @@
+{
+  "name": "itera-connect",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.ts",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "start": "expo start",
+    "web": "expo start --web --port 8090 --localhost",
+    "android": "expo start --android",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "export:web": "expo export --platform web --output-dir dist",
+    "test:sql": "supabase/tests/run.sh",
+    "test:palette": "python3 scripts/palette-check.py"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@supabase/supabase-js": "^2.116.0",
+    "expo": "~57.0.20",
+    "expo-constants": "~57.0.17",
+    "expo-status-bar": "~57.0.1",
+    "react": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-url-polyfill": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.0",
+    "babel-preset-expo": "~57.0.10",
+    "eslint": "^9.39.0",
+    "prettier": "^3.9.6",
+    "react-dom": "19.2.3",
+    "react-native-web": "~0.21.0",
+    "tsx": "^4.20.0",
+    "typescript": "~5.9.0",
+    "typescript-eslint": "^8.46.0"
+  }
+}
