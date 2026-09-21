@@ -87,6 +87,15 @@ export type Item = {
   shareSourcing?: boolean;
 };
 
+/**
+ * How a request for approval was answered.
+ *   approved           — the homeowner said yes
+ *   changes_requested  — the homeowner said "change it" and why; the contractor's move
+ *   withdrawn          — the contractor took the question back (dropping the item, or starting
+ *                        over with a different one); only the contractor can post this
+ */
+export type Decision = 'approved' | 'changes_requested' | 'withdrawn';
+
 export type ItemStatus =
   'proposed' | 'changes_requested' | 'approved' | 'ordered' | 'delivered' | 'installed';
 
@@ -141,7 +150,13 @@ export type Ref = { kind: 'item' | 'event'; id: Id; label: string };
 export type ProjectEvent = EventBase &
   (
     | { kind: 'note' }
-    | { kind: 'milestone'; title: string; status: 'planned' | 'started' | 'done'; due?: IsoDate }
+    | {
+        kind: 'milestone';
+        title: string;
+        /** 'update' is a progress note: it leaves the milestone where it is. */
+        status: 'planned' | 'started' | 'update' | 'done';
+        due?: IsoDate;
+      }
     | { kind: 'schedule'; title: string; date: IsoDate; who?: string; needs?: Id[] }
     | { kind: 'order'; itemId: Id; expectedDate?: IsoDate }
     | { kind: 'delivery'; itemId: Id; expected: number; received: number; damaged: number }
@@ -156,7 +171,7 @@ export type ProjectEvent = EventBase &
     | {
         kind: 'approval_decided';
         approvalId: Id;
-        decision: 'approved' | 'changes_requested';
+        decision: Decision;
       }
     | { kind: 'photo'; uri: string; caption?: string }
     /**

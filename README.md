@@ -79,10 +79,14 @@ Rules the code keeps:
   the request" on an approval — all jump to the entry or item and highlight it (FocusContext).
   Notes the concierge drafts carry the same references (`refs` on the entry), so the posted
   update is a list of links, not a wall of text. A future language model has to cite the same way.
-- **Request changes keeps the question open.** The homeowner says what to change; the item shows
-  "Change requested"; the card stays on their list as "waiting on the contractor" and moves to
-  the contractor's concierge. The contractor revises and asks again (same approvalId, round 2),
-  which reopens it for the homeowner. Only "approved" closes it.
+- **Request changes keeps the question open — and the contractor has three honest answers.** The
+  homeowner says what to change; the item shows "Change requested"; the card stays on their list
+  as "waiting on the contractor" and moves to the contractor's concierge. From that card (or the
+  entry itself) the contractor can _Reply_ (threaded under the change request), _Revise and ask
+  again_ (opens the approval form for that item — same approvalId, round 2, which reopens it for
+  the homeowner) or _Withdraw request_ (a `withdrawn` decision only the contractor can post: the
+  question closes, the item returns to Proposed, the note goes to whoever was asked). Only
+  "approved" or "withdrawn" closes a question; nothing can follow either.
 - **Dismiss is not delete.** Setting a concierge card aside posts a business-only `dismissal`
   entry; the card moves to "Set aside" with Restore, and comes back on its own — urgent the next
   day, attention after three, info only when restored. On or after its due date it cannot be
@@ -119,7 +123,8 @@ anyone who is neither an approved contractor nor the holder of a live invitation
 
 Create a business and project (mode chosen with a plain-language explanation), add and edit
 items with a live "the homeowner will see…" preview, invite homeowners, post updates to a chosen
-audience, move milestones through Start / Update / Done, reschedule jobs, and act on concierge
+audience, move milestones through Start / Update / Done (an Update is its own entry — "Tile floor & walls —
+update" with the note — and leaves the milestone where it is), reschedule jobs, and act on concierge
 suggestions — including sending the reminders it drafts. The homeowner approves, replies to
 entries, and sees their own list of things to order.
 

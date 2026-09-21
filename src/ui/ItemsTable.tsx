@@ -2,7 +2,7 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { money, shortDate } from '../model/format';
 import { arrivalOf, collisionFor, expectedOnSite, type Arrival } from '../model/logistics';
-import type { Approval } from '../model/progress';
+import { isOpen, type Approval } from '../model/progress';
 import type { IsoDate, Item, Project, ProjectEvent, Role } from '../model/types';
 import { priceVisibleToHomeowner, sourcingVisibleToHomeowner } from '../model/visibility';
 import { Badge, Button, Card, Muted, RefLink, Row } from './primitives';
@@ -60,7 +60,7 @@ export function ItemsTable({
       {items.map((item) => {
         const arrival = arrivalOf(item, events);
         const collision = collisionFor(item, events, now);
-        const approval = approvals.find((a) => a.itemId === item.id && a.decision !== 'approved');
+        const approval = approvals.find((a) => a.itemId === item.id && isOpen(a));
         const canAsk =
           onRequestApproval &&
           viewerRole === 'contractor' &&

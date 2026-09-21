@@ -39,6 +39,11 @@ export type Suggestion = {
   action?: { review: string; confirm: string };
   /** The date this stops being a warning and becomes a problem. Past it, dismissing needs a snooze. */
   dueBy?: IsoDate;
+  /**
+   * Set when the card is a homeowner's change request. The panel offers the contractor the three
+   * honest answers — reply, revise and ask again, withdraw — without leaving the card.
+   */
+  respond?: { approvalId: Id; itemId?: Id; replyTo: Id; who: string };
 };
 
 const REMIND = { review: 'Review reminder', confirm: 'Send reminder' };
@@ -78,7 +83,7 @@ export function overdueApprovals({ projectId, events, items, now }: RuleInput): 
         title: `${a.decidedBy ?? 'The homeowner'} asked for changes to ${a.title}`,
         detail:
           (a.decisionNote ? `“${a.decisionNote}” · ` : '') +
-          `${shortDate(a.decidedAt ?? now)}. Revise the item and ask for approval again.`,
+          `${shortDate(a.decidedAt ?? now)}. Reply, revise the item and ask again, or withdraw the request.`,
         source: [
           ...(item ? [itemRef(item)] : []),
           ...(a.decidedEventId
@@ -86,10 +91,18 @@ export function overdueApprovals({ projectId, events, items, now }: RuleInput): 
             : []),
           requestSource,
         ],
+        // The contractor answers from the card: reply on the change request, revise the item and
+        // ask again, or withdraw the question.
+        respond: {
+          approvalId: a.approvalId,
+          itemId: a.itemId,
+          replyTo: a.decidedEventId ?? a.requestedEventId,
+          who: (a.decidedBy ?? 'the homeowner').split(' ')[0]!,
+        },
       });
       continue;
     }
-    if (a.decision === 'approved') continue;
+    if (a.decision === 'approved' || a.decision === 'withdrawn') continue;
 
     const waitingDays = daysBetween(a.requestedAt, now);
     const pastDue = a.dueBy !== undefined && daysBetween(a.dueBy, now) > 0;
@@ -296,7 +309,10 @@ export function weeklyDigest(
         line = `Ordered ${itemName(e.itemId)}${e.expectedDate ? `, expected ${shortDate(e.expectedDate)}` : ''}`;
         break;
       case 'approval_decided':
-        line = `You ${e.decision === 'approved' ? 'approved' : 'asked for changes to'} an item — thank you`;
+        line =
+          e.decision === 'withdrawn'
+            ? `We withdrew a request for your approval${e.body ? ` — ${e.body}` : ''}`
+            : `You ${e.decision === 'approved' ? 'approved' : 'asked for changes to'} an item — thank you`;
         break;
       case 'approval_requested':
         line = `Still needs your decision: ${e.title}`;

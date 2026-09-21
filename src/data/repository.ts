@@ -8,6 +8,7 @@ import type {
   ProjectEvent,
   ProjectMember,
   Viewer,
+  Decision,
 } from '../model/types';
 
 /** What the contractor fills in to start a project. Mode sets purchasing and price defaults. */
@@ -37,10 +38,16 @@ export interface ProjectRepository {
   /** Homeowners may only post to an audience that includes themselves; the repository enforces it. */
   appendEvent(event: NewEvent): Promise<ProjectEvent>;
   reply(projectId: Id, eventId: Id, body: string): Promise<ProjectEvent>;
+  /**
+   * Answer the latest request for an approval. A homeowner who was asked may approve or request
+   * changes once per request; the contractor may withdraw a request that is pending or awaiting
+   * their revision. The item under discussion follows: approved / changes_requested / back to
+   * proposed.
+   */
   decideApproval(
     projectId: Id,
     approvalId: Id,
-    decision: 'approved' | 'changes_requested',
+    decision: Decision,
     note?: string,
   ): Promise<ProjectEvent>;
   createInvitation(projectId: Id, email: string): Promise<Invitation>;

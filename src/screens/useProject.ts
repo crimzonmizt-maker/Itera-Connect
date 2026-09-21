@@ -11,6 +11,7 @@ import type {
   ProjectEvent,
   ProjectMember,
   Viewer,
+  Decision,
 } from '../model/types';
 
 /** Loads a project for the current viewer and keeps it fresh. Screens read; they never fetch. */
@@ -94,7 +95,7 @@ export function useProject(
     suggestions,
     post: (event: NewEvent) => act(() => repo.appendEvent(event)),
     reply: (eventId: Id, body: string) => act(() => repo.reply(projectId, eventId, body)),
-    decide: (approvalId: Id, decision: 'approved' | 'changes_requested', note?: string) =>
+    decide: (approvalId: Id, decision: Decision, note?: string) =>
       act(() => repo.decideApproval(projectId, approvalId, decision, note)),
     invite: (email: string) => repo.createInvitation(projectId, email),
     // Throws on failure so the form can show the error next to the field and stay open.

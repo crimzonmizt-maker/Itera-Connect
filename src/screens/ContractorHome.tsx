@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { addDays, money, newId, shortDate } from '../model/format';
+import { isOpen } from '../model/progress';
 import type { EventKind, Id, Item, NewEvent, ProjectMember } from '../model/types';
 import { audienceLabel, defaultAudience, homeownerIds } from '../model/visibility';
 import { ConciergePanel } from '../ui/ConciergePanel';
 import { ItemsTable } from '../ui/ItemsTable';
-import { useFocusRouter } from '../ui/FocusContext';
+import { useFocus, useFocusRouter } from '../ui/FocusContext';
 import {
   Badge,
   Button,
@@ -47,10 +48,23 @@ export function ContractorHome({ state }: { state: ProjectState }) {
   const [tab, setTab] = useState<Tab>('overview');
   const [editing, setEditing] = useState<Item | 'new' | undefined>();
   const [asking, setAsking] = useState<Item>();
-  // A jump to an item lives on the Selections tab; everything else on Overview.
-  useFocusRouter((key) => setTab(key.startsWith('item:') ? 'selections' : 'overview'));
+  const { focus } = useFocus();
+  // Items and the item forms live on the Selections tab; everything else on Overview.
+  useFocusRouter((key) =>
+    setTab(key.startsWith('item:') || key.startsWith('form:') ? 'selections' : 'overview'),
+  );
+  // "Revise and ask again" from a concierge card or an entry: open the approval form for that
+  // item on the Selections tab and scroll to it. The form reuses the approvalId, so this is
+  // round 2 of the same question, not a new one.
+  const askAgain = (itemId: Id) => {
+    const item = items.find((i) => i.id === itemId);
+    if (!item) return;
+    setEditing(undefined);
+    setAsking(item);
+    focus(`form:ask:${item.id}`);
+  };
   if (!project || !viewer) return null;
-  const openCount = approvals.filter((a) => a.decision !== 'approved').length;
+  const openCount = approvals.filter(isOpen).length;
 
   return (
     <View style={{ gap: space.sm }}>
@@ -110,6 +124,9 @@ export function ContractorHome({ state }: { state: ProjectState }) {
           projectId={project.id}
           now={now}
           onPost={post}
+          onReply={reply}
+          onRevise={askAgain}
+          onWithdraw={(approvalId, note) => decide(approvalId, 'withdrawn', note)}
         />
 
         <SectionTitle hint="Anything you post here goes on the record. Pick who sees it; nobody else can.">
@@ -144,6 +161,8 @@ export function ContractorHome({ state }: { state: ProjectState }) {
             })
           }
           approvals={approvals}
+          onRevise={askAgain}
+          onWithdraw={(approvalId, note) => decide(approvalId, 'withdrawn', note)}
         />
       </TabPane>
 
@@ -189,8 +208,12 @@ export function ContractorHome({ state }: { state: ProjectState }) {
           <AskApproval
             item={asking}
             members={members}
-            round={(approvals.find((a) => a.itemId === asking.id)?.round ?? 0) + 1}
-            existingApprovalId={approvals.find((a) => a.itemId === asking.id)?.approvalId}
+            // Re-asking after "change it" continues the same question; after a withdrawal it is
+            // a new one, so only an open approval is carried forward.
+            round={(approvals.find((a) => a.itemId === asking.id && isOpen(a))?.round ?? 0) + 1}
+            existingApprovalId={
+              approvals.find((a) => a.itemId === asking.id && isOpen(a))?.approvalId
+            }
             onPost={async (e) => {
               await post(e);
               setAsking(undefined);
@@ -218,10 +241,7 @@ export function ContractorHome({ state }: { state: ProjectState }) {
             setAsking(undefined);
             setEditing(item);
           }}
-          onRequestApproval={(item) => {
-            setEditing(undefined);
-            setAsking(item);
-          }}
+          onRequestApproval={(item) => askAgain(item.id)}
         />
       </TabPane>
     </View>
@@ -474,7 +494,7 @@ function AskApproval({
     setAudience((a) => (a.includes(id) ? a.filter((x) => x !== id) : [...a, id]));
   const valid = question.trim().length > 0 && audience.length > 0;
   return (
-    <Card style={{ gap: space.md }}>
+    <Card style={{ gap: space.md }} focusKey={`form:ask:${item.id}`}>
       <Text style={styles.h2}>
         {round > 1
           ? `Ask again about ${item.name} (round ${round})`

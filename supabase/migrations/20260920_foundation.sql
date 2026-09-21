@@ -339,7 +339,7 @@ begin
   case p_kind
     when 'note' then null;
     when 'milestone' then
-      if d->>'title' is null or coalesce(d->>'status','') not in ('planned','started','done') then raise exception 'IC_EVENT_DATA'; end if;
+      if d->>'title' is null or coalesce(d->>'status','') not in ('planned','started','update','done') then raise exception 'IC_EVENT_DATA'; end if;
     when 'schedule' then
       if d->>'title' is null or d->>'date' is null then raise exception 'IC_EVENT_DATA'; end if;
     when 'order' then
@@ -350,7 +350,7 @@ begin
     when 'approval_requested' then
       if d->>'approvalId' is null or d->>'title' is null then raise exception 'IC_EVENT_DATA'; end if;
     when 'approval_decided' then
-      if d->>'approvalId' is null or coalesce(d->>'decision','') not in ('approved','changes_requested') then raise exception 'IC_EVENT_DATA'; end if;
+      if d->>'approvalId' is null or coalesce(d->>'decision','') not in ('approved','changes_requested','withdrawn') then raise exception 'IC_EVENT_DATA'; end if;
     when 'photo' then
       if d->>'uri' is null then raise exception 'IC_EVENT_DATA'; end if;
     when 'document_sent' then
@@ -373,7 +373,7 @@ create or replace function public.ic_append_event(p_project uuid, p_kind text, p
 returns uuid language plpgsql security definer set search_path = '' as $$
 declare v_role text; v_name text; v_id uuid; v_uid uuid := auth.uid();
         v_audience uuid[] := coalesce(p_audience, '{}'); v_data jsonb := coalesce(p_data, '{}'::jsonb);
-        v_req_audience uuid[]; v_req_item text;
+        v_req_audience uuid[]; v_req_item text; v_current text;
 begin
   if public.ic_is_team(p_project) then v_role := 'contractor';
   elsif public.ic_is_homeowner(p_project) then v_role := 'homeowner';
@@ -387,12 +387,19 @@ begin
       order by r.at desc limit 1;
     if not found then raise exception 'IC_APPROVAL_MISSING' using errcode = 'P0002'; end if;
     if v_role = 'homeowner' and not (v_uid = any(v_req_audience)) then raise insufficient_privilege; end if;
+    -- Only the contractor can take a question back.
+    if v_data->>'decision' = 'withdrawn' and v_role <> 'contractor' then raise insufficient_privilege; end if;
     -- "Already decided" applies to the current request only: a decision that predates the latest
-    -- (re)request has been superseded by it.
-    if exists (select 1 from public.ic_events e where e.project_id = p_project and e.kind = 'approval_decided'
-               and e.data->>'approvalId' = v_data->>'approvalId'
-               and e.at > (select max(r.at) from public.ic_events r where r.project_id = p_project
-                            and r.kind = 'approval_requested' and r.data->>'approvalId' = v_data->>'approvalId'))
+    -- (re)request has been superseded by it. The one decision allowed to follow another is the
+    -- contractor withdrawing after "change it"; nothing follows approved or withdrawn.
+    select e.data->>'decision' into v_current from public.ic_events e
+      where e.project_id = p_project and e.kind = 'approval_decided'
+        and e.data->>'approvalId' = v_data->>'approvalId'
+        and e.at > (select max(r.at) from public.ic_events r where r.project_id = p_project
+                     and r.kind = 'approval_requested' and r.data->>'approvalId' = v_data->>'approvalId')
+      order by e.at desc limit 1;
+    if v_current is not null
+       and not (v_data->>'decision' = 'withdrawn' and v_current = 'changes_requested')
     then raise exception 'IC_ALREADY_DECIDED'; end if;
     v_audience := v_req_audience;
   elsif v_role = 'homeowner' then
@@ -414,11 +421,11 @@ begin
   insert into public.ic_events(project_id, author_id, author_name, author_role, audience, kind, body, data)
     values (p_project, v_uid, v_name, v_role, v_audience, p_kind, p_body, v_data) returning id into v_id;
 
-  -- The item under discussion follows the decision: approved, or back to the contractor.
+  -- The item under discussion follows the decision: approved, back to the contractor, or (withdrawn) back to proposed.
   -- Only items still under discussion move; a late "request changes" does not un-order anything.
   if p_kind = 'approval_decided' and v_req_item is not null then
     update public.ic_items i
-      set status = case when v_data->>'decision' = 'approved' then 'approved' else 'changes_requested' end,
+      set status = case v_data->>'decision' when 'approved' then 'approved' when 'withdrawn' then 'proposed' else 'changes_requested' end,
           updated_at = now()
       where i.project_id = p_project and i.status in ('proposed','changes_requested') and i.id::text = v_req_item;
   end if;

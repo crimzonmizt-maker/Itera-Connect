@@ -3,9 +3,9 @@ import { StyleSheet, Text, View } from 'react-native';
 import { dismissUntil, mustSnooze, type SuggestionState } from '../concierge/dismissals';
 import type { Suggestion } from '../concierge/rules';
 import { addDays, shortDate } from '../model/format';
-import type { IsoDate, NewEvent, ProjectMember } from '../model/types';
+import type { Id, IsoDate, NewEvent, ProjectMember } from '../model/types';
 import { audienceLabel } from '../model/visibility';
-import { Badge, Button, Card, Muted, RefRow, Row } from './primitives';
+import { Badge, Button, Card, Field, Muted, RefRow, Row } from './primitives';
 import { space, type, type Palette } from './theme';
 import { useStyles, useTheme } from './ThemeContext';
 
@@ -29,6 +29,9 @@ export function ConciergePanel({
   projectId,
   now,
   onPost,
+  onReply,
+  onRevise,
+  onWithdraw,
 }: {
   active: SuggestionState[];
   archived: SuggestionState[];
@@ -38,6 +41,10 @@ export function ConciergePanel({
   projectId: string;
   now: IsoDate;
   onPost: (event: NewEvent) => Promise<void>;
+  /** For change-request cards (`suggestion.respond`): answer without leaving the card. */
+  onReply?: (eventId: Id, body: string) => Promise<void>;
+  onRevise?: (itemId: Id) => void;
+  onWithdraw?: (approvalId: Id, note?: string) => Promise<void>;
 }) {
   const styles = useStyles(makeStyles);
   const { tones } = useTheme();
@@ -47,6 +54,10 @@ export function ConciergePanel({
   const [lastDismissed, setLastDismissed] = useState<Suggestion>();
   const [showAll, setShowAll] = useState(false);
   const [index, setIndex] = useState(0);
+  // Change-request cards: which card has its reply / withdraw box open, and its text.
+  const [responding, setResponding] = useState<{ id: string; mode: 'reply' | 'withdraw' }>();
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
   // The list shrinks when a card is dismissed or resolved; never point past the end.
   useEffect(() => {
     if (index > active.length - 1) setIndex(Math.max(0, active.length - 1));
@@ -191,6 +202,46 @@ export function ConciergePanel({
             <Text style={styles.title}>{s.title}</Text>
             <Text style={styles.detail}>{s.detail}</Text>
             <RefRow refs={s.source} label="From" />
+            {s.respond && responding?.id === s.id ? (
+              <View style={styles.draft}>
+                <Field
+                  label={
+                    responding.mode === 'reply'
+                      ? `Reply to ${s.respond.who} — stays attached to the change request`
+                      : `Withdraw the request — a note to ${s.respond.who} (optional)`
+                  }
+                  value={note}
+                  onChangeText={setNote}
+                  multiline
+                  autoFocus
+                  placeholder={
+                    responding.mode === 'reply'
+                      ? 'e.g. Understood — I will bring two other samples Thursday.'
+                      : 'e.g. We will find another option and ask again.'
+                  }
+                />
+                <Row wrap>
+                  <Button
+                    title={responding.mode === 'reply' ? 'Send reply' : 'Yes, withdraw'}
+                    glyph={responding.mode === 'reply' ? '↩' : '⊘'}
+                    disabled={busy || (responding.mode === 'reply' && !note.trim())}
+                    onPress={async () => {
+                      setBusy(true);
+                      try {
+                        if (responding.mode === 'reply')
+                          await onReply?.(s.respond!.replyTo, note.trim());
+                        else await onWithdraw?.(s.respond!.approvalId, note.trim() || undefined);
+                        setResponding(undefined);
+                        setNote('');
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                  />
+                  <Button title="Cancel" kind="quiet" onPress={() => setResponding(undefined)} />
+                </Row>
+              </View>
+            ) : null}
             {s.proposedEvent && open ? (
               <View style={styles.draft}>
                 <Text style={styles.draftLabel}>
@@ -221,6 +272,39 @@ export function ConciergePanel({
               </View>
             ) : null}
             <Row wrap>
+              {s.respond && responding?.id !== s.id ? (
+                <>
+                  {onRevise && s.respond.itemId ? (
+                    <Button
+                      title="Revise and ask again"
+                      glyph="?"
+                      onPress={() => onRevise(s.respond!.itemId!)}
+                    />
+                  ) : null}
+                  {onReply ? (
+                    <Button
+                      title={`Reply to ${s.respond.who}`}
+                      glyph="↩"
+                      kind="secondary"
+                      onPress={() => {
+                        setNote('');
+                        setResponding({ id: s.id, mode: 'reply' });
+                      }}
+                    />
+                  ) : null}
+                  {onWithdraw ? (
+                    <Button
+                      title="Withdraw request"
+                      glyph="⊘"
+                      kind="quiet"
+                      onPress={() => {
+                        setNote('');
+                        setResponding({ id: s.id, mode: 'withdraw' });
+                      }}
+                    />
+                  ) : null}
+                </>
+              ) : null}
               {s.proposedEvent ? (
                 open ? (
                   <Button

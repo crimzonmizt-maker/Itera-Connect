@@ -1,4 +1,4 @@
-import type { Id, IsoDate, ProjectEvent } from './types';
+import type { Decision, Id, IsoDate, ProjectEvent } from './types';
 
 export type Milestone = {
   title: string;
@@ -20,10 +20,12 @@ export function projectProgress(events: ProjectEvent[]): Progress {
   const byTitle = new Map<string, Milestone>();
   for (const event of events) {
     if (event.kind !== 'milestone') continue;
+    const prev = byTitle.get(event.title);
     byTitle.set(event.title, {
       title: event.title,
-      status: event.status,
-      due: event.due ?? byTitle.get(event.title)?.due,
+      // An update is news about the milestone, not a change of state.
+      status: event.status === 'update' ? (prev?.status ?? 'planned') : event.status,
+      due: event.due ?? prev?.due,
       updatedAt: event.at,
     });
   }
@@ -50,7 +52,7 @@ export type Approval = {
   amount?: number;
   itemId?: Id;
   /** Latest decision on the latest request. Undefined = still waiting on the homeowner. */
-  decision?: 'approved' | 'changes_requested';
+  decision?: Decision;
   decidedAt?: IsoDate;
   decidedBy?: string;
   decidedEventId?: Id;
@@ -64,8 +66,9 @@ export type Approval = {
  * changes_requested  — the homeowner answered "change it"; waiting on the contractor to revise
  *                      and request again (a new approval_requested with the same approvalId)
  * approved           — done
+ * withdrawn          — done, the other way: the contractor took the question back
  */
-export type ApprovalState = 'pending' | 'changes_requested' | 'approved';
+export type ApprovalState = 'pending' | Decision;
 export const approvalState = (a: Approval): ApprovalState => a.decision ?? 'pending';
 
 /** Approvals are not stored; they are read off the request/decision pairs in the event list. */
@@ -100,6 +103,6 @@ export function approvals(events: ProjectEvent[]): Approval[] {
   return [...map.values()];
 }
 
-/** Everything not yet approved: waiting on the homeowner, or on the contractor to revise. */
-export const openApprovals = (events: ProjectEvent[]) =>
-  approvals(events).filter((a) => a.decision !== 'approved');
+/** Still a live question: waiting on the homeowner, or on the contractor to revise or withdraw. */
+export const isOpen = (a: Approval) => a.decision !== 'approved' && a.decision !== 'withdrawn';
+export const openApprovals = (events: ProjectEvent[]) => approvals(events).filter(isOpen);

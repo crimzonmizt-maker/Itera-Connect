@@ -15,14 +15,18 @@ export function ProgressBar({
   onAdvance,
 }: {
   progress: Progress;
-  onAdvance?: (milestone: Milestone, status: Milestone['status'], body?: string) => Promise<void>;
+  onAdvance?: (
+    milestone: Milestone,
+    status: Milestone['status'] | 'update',
+    body?: string,
+  ) => Promise<void>;
 }) {
   const { palette: p } = useTheme();
   const styles = useStyles(makeStyles);
   const [updating, setUpdating] = useState<string>(); // milestone title with the note box open
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
-  const send = async (m: Milestone, status: Milestone['status'], body?: string) => {
+  const send = async (m: Milestone, status: Milestone['status'] | 'update', body?: string) => {
     if (!onAdvance) return;
     setBusy(true);
     try {
@@ -113,7 +117,7 @@ export function ProgressBar({
                     title="Post update"
                     glyph="↑"
                     disabled={busy || !note.trim()}
-                    onPress={() => void send(m, m.status, note.trim())}
+                    onPress={() => void send(m, 'update', note.trim())}
                   />
                   <Button title="Cancel" kind="quiet" onPress={() => setUpdating(undefined)} />
                 </Row>

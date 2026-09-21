@@ -13,6 +13,7 @@ import type {
   Reply,
   Role,
   Viewer,
+  Decision,
 } from '../model/types';
 import type { ItemInput, NewProject, ProjectRepository } from './repository';
 import { supabase } from './supabaseClient';
@@ -219,12 +220,7 @@ export class SupabaseRepository implements ProjectRepository {
     if (!updated) throw new Error('That conversation no longer exists.');
     return updated;
   }
-  async decideApproval(
-    projectId: Id,
-    approvalId: Id,
-    decision: 'approved' | 'changes_requested',
-    note?: string,
-  ) {
+  async decideApproval(projectId: Id, approvalId: Id, decision: Decision, note?: string) {
     // The database copies the audience from the request; what we pass here is ignored for homeowners.
     return this.appendEvent({
       projectId,

@@ -213,6 +213,61 @@ do $$ begin
   assert (select status from public.ic_items_v where name = 'Vanity') = 'approved', 'second round approved';
 end $$;
 
+-- ── Withdrawing: the contractor's other answer to "change it" ─────────────────────────────
+-- Mike proposes grout, Dana asks for changes, Mike takes the question back. Only he can; the
+-- item returns to proposed; the withdrawn request is closed to any further decision.
+reset role;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000c001","role":"authenticated"}', true);
+set local role authenticated;
+select public.ic_upsert_item(:'project_id',
+  '{"name":"Grout","quantity":2,"unit":"bag","status":"proposed","purchasedBy":"contractor"}') as grout_id \gset
+select public.ic_append_event(:'project_id', 'approval_requested',
+  array['00000000-0000-0000-0000-00000000d001']::uuid[],
+  null, format('{"approvalId":"appr-3","title":"Grout colour","itemId":"%s"}', :'grout_id')::jsonb);
+-- A milestone update passes the data check and is its own status.
+select public.ic_append_event(:'project_id', 'milestone',
+  array['00000000-0000-0000-0000-00000000d001']::uuid[],
+  'Walls first, floor Thursday', '{"title":"Tile floor & walls","status":"update"}');
+reset role;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000d001","role":"authenticated"}', true);
+set local role authenticated;
+select public.ic_append_event(:'project_id', 'approval_decided', '{}', 'I hate this one', '{"approvalId":"appr-3","decision":"changes_requested"}');
+do $$
+declare v_project uuid := (select id from public.ic_projects limit 1);
+begin
+  assert (select status from public.ic_items_v where name = 'Grout') = 'changes_requested', 'grout follows the change request';
+  begin
+    perform public.ic_append_event(v_project, 'approval_decided', '{}', null, '{"approvalId":"appr-3","decision":"withdrawn"}');
+    raise exception 'homeowner withdraw should have failed';
+  exception when others then
+    if sqlerrm like '%should have failed%' then raise; end if;
+    if sqlerrm not like '%insufficient_privilege%' and sqlstate <> '42501' then raise exception 'wrong error: % (%)', sqlerrm, sqlstate; end if;
+  end;
+end $$;
+reset role;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000c001","role":"authenticated"}', true);
+set local role authenticated;
+select public.ic_append_event(:'project_id', 'approval_decided', '{}', 'We will find another option', '{"approvalId":"appr-3","decision":"withdrawn"}');
+do $$ begin
+  assert (select status from public.ic_items_v where name = 'Grout') = 'proposed', 'withdrawing puts the item back to proposed';
+  assert (select audience from public.ic_events where kind = 'approval_decided' and data->>'decision' = 'withdrawn')
+         = array['00000000-0000-0000-0000-00000000d001']::uuid[], 'the withdrawal goes to the person who was asked';
+end $$;
+reset role;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000d001","role":"authenticated"}', true);
+set local role authenticated;
+do $$
+declare v_project uuid := (select id from public.ic_projects limit 1);
+begin
+  begin
+    perform public.ic_append_event(v_project, 'approval_decided', '{}', null, '{"approvalId":"appr-3","decision":"approved"}');
+    raise exception 'approving a withdrawn request should have failed';
+  exception when others then
+    if sqlerrm like '%should have failed%' then raise; end if;
+    if sqlerrm not like '%IC_ALREADY_DECIDED%' then raise exception 'wrong error: %', sqlerrm; end if;
+  end;
+end $$;
+
 -- ── Act as Sam ─────────────────────────────────────────────────────────────────────────────
 reset role;
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000a001","role":"authenticated"}', true);
@@ -247,7 +302,7 @@ reset role;
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000c001","role":"authenticated"}', true);
 set local role authenticated;
 do $$ begin
-  assert (select count(*) from public.ic_events) = 11, 'contractor sees every entry';
+  assert (select count(*) from public.ic_events) = 15, 'contractor sees every entry';
   assert (select bool_and(audience = array['00000000-0000-0000-0000-00000000d001']::uuid[]) from public.ic_events where kind = 'approval_decided'),
        'decision audience copied from the request';
   assert (select array_length(audience, 1) from public.ic_events where kind = 'note' and author_role = 'homeowner') = 2,

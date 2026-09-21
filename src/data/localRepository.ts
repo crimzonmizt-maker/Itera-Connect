@@ -12,6 +12,7 @@ import type {
   ProjectMember,
   Role,
   Viewer,
+  Decision,
 } from '../model/types';
 import { homeownerIds, modeDefaults, redactItems, visibleEvents } from '../model/visibility';
 import type { ItemInput, NewProject, ProjectRepository } from './repository';
@@ -168,20 +169,26 @@ export class LocalRepository implements ProjectRepository {
     return event;
   }
 
-  async decideApproval(
-    projectId: Id,
-    approvalId: Id,
-    decision: 'approved' | 'changes_requested',
-    note?: string,
-  ) {
+  async decideApproval(projectId: Id, approvalId: Id, decision: Decision, note?: string) {
+    const v = await this.viewer();
     const requested = this.latestRequest(projectId, approvalId);
     if (!requested) throw new Error('That approval was not found.');
+    if (decision === 'withdrawn' && v.role !== 'contractor')
+      throw new Error('Only the contractor can withdraw a request.');
     // "Already decided" applies to the current request only; a re-request supersedes the old
     // decision. Order in the spine decides, not timestamps (tests run with a fixed clock).
     const requestIndex = this.events.indexOf(requested);
+    const current = this.events.find(
+      (e, i) => i > requestIndex && e.kind === 'approval_decided' && e.approvalId === approvalId,
+    );
+    // The one decision that may follow another: the contractor withdrawing after "change it".
+    // Nothing follows "approved" or "withdrawn" — those close the question.
     if (
-      this.events.some(
-        (e, i) => i > requestIndex && e.kind === 'approval_decided' && e.approvalId === approvalId,
+      current &&
+      !(
+        decision === 'withdrawn' &&
+        current.kind === 'approval_decided' &&
+        current.decision === 'changes_requested'
       )
     )
       throw new Error('Already decided.');
@@ -190,7 +197,12 @@ export class LocalRepository implements ProjectRepository {
       // Only items still under discussion move; something already ordered is not un-ordered
       // by a late "request changes".
       if (item && (item.status === 'proposed' || item.status === 'changes_requested'))
-        item.status = decision === 'approved' ? 'approved' : 'changes_requested';
+        item.status =
+          decision === 'approved'
+            ? 'approved'
+            : decision === 'withdrawn'
+              ? 'proposed'
+              : 'changes_requested';
     }
     return this.appendEvent({
       projectId,

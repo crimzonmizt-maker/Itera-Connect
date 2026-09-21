@@ -26,6 +26,10 @@ type Props = {
   ) => Promise<void>;
   /** Current state of every approval, so a request card knows whether it is still live. */
   approvals: Approval[];
+  /** Contractor only: answer a change request from its entry — revise the item and ask again. */
+  onRevise?: (itemId: Id) => void;
+  /** Contractor only: take a pending or change-requested question back. */
+  onWithdraw?: (approvalId: Id, note?: string) => Promise<void>;
 };
 
 /** Newest first. Every event is a card; replies live under the event they are about. */
@@ -38,6 +42,8 @@ export function Timeline({
   onDecide,
   onReschedule,
   approvals,
+  onRevise,
+  onWithdraw,
 }: Props) {
   const ordered = [...events].reverse();
   if (ordered.length === 0) return <Muted>Nothing has happened on this project yet.</Muted>;
@@ -54,6 +60,8 @@ export function Timeline({
           onDecide={onDecide}
           onReschedule={onReschedule}
           approvals={approvals}
+          onRevise={onRevise}
+          onWithdraw={onWithdraw}
         />
       ))}
     </View>
@@ -108,7 +116,11 @@ function Headline({
       const a = approvals.find((x) => x.approvalId === e.approvalId);
       return (
         <>
-          {e.decision === 'approved' ? 'Approved' : 'Asked for changes'}
+          {e.decision === 'approved'
+            ? 'Approved'
+            : e.decision === 'withdrawn'
+              ? 'Withdrew the request'
+              : 'Asked for changes'}
           {a ? (
             <>
               {' · '}
@@ -153,6 +165,8 @@ function EventCard({
   onDecide,
   onReschedule,
   approvals,
+  onRevise,
+  onWithdraw,
 }: Omit<Props, 'events'> & { event: ProjectEvent }) {
   const { tones } = useTheme();
   const styles = useStyles(makeStyles);
@@ -162,6 +176,7 @@ function EventCard({
   const [moving, setMoving] = useState(false);
   const [moveDays, setMoveDays] = useState('7');
   const [changing, setChanging] = useState(false); // "Request changes" note box
+  const [withdrawing, setWithdrawing] = useState(false); // contractor's "Withdraw request" note box
   const canMove = e.kind === 'schedule' && viewerRole === 'contractor' && !!onReschedule;
   const k = kindGlyph[e.kind];
   // For a request card: which approval it belongs to, and whether THIS card is the live request.
@@ -174,6 +189,15 @@ function EventCard({
   const isPending = isCurrentRequest && approval?.decision === undefined;
   const awaitingContractor = isCurrentRequest && approval?.decision === 'changes_requested';
   const canDecide = isPending && viewerRole === 'homeowner' && !!onDecide;
+  // The contractor may answer from the live request, or from the homeowner's change-request entry.
+  const changeRequest =
+    e.kind === 'approval_decided' && e.decision === 'changes_requested'
+      ? approvals.find((a) => a.approvalId === e.approvalId && a.decidedEventId === e.id)
+      : undefined;
+  const answerable =
+    viewerRole === 'contractor'
+      ? (changeRequest ?? (isPending || awaitingContractor ? approval : undefined))
+      : undefined;
 
   const send = async () => {
     if (!draft.trim()) return;
@@ -262,6 +286,63 @@ function EventCard({
         />
       ) : null}
       {superseded ? <Muted>Superseded by a revised request.</Muted> : null}
+      {answerable && !withdrawing ? (
+        <Row wrap style={{ marginTop: space.xs }}>
+          {onRevise && answerable.itemId && answerable.decision === 'changes_requested' ? (
+            <Button
+              title="Revise and ask again"
+              glyph="?"
+              kind="secondary"
+              onPress={() => onRevise(answerable.itemId!)}
+            />
+          ) : null}
+          {onWithdraw ? (
+            <Button
+              title="Withdraw request"
+              glyph="⊘"
+              kind="quiet"
+              onPress={() => {
+                setDraft('');
+                setWithdrawing(true);
+              }}
+            />
+          ) : null}
+        </Row>
+      ) : null}
+      {answerable && withdrawing && onWithdraw ? (
+        <View style={{ gap: space.sm }}>
+          <Field
+            label="Withdraw the request — a note to the homeowner (optional)"
+            value={draft}
+            onChangeText={setDraft}
+            multiline
+            autoFocus
+            placeholder="e.g. We will find another option and ask again."
+          />
+          <Muted>
+            The question closes; the item goes back to Proposed. The request and this note stay on
+            the record.
+          </Muted>
+          <Row>
+            <Button
+              title="Yes, withdraw"
+              glyph="⊘"
+              disabled={busy}
+              onPress={async () => {
+                setBusy(true);
+                try {
+                  await onWithdraw(answerable.approvalId, draft.trim() || undefined);
+                  setDraft('');
+                  setWithdrawing(false);
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            />
+            <Button title="Cancel" kind="quiet" onPress={() => setWithdrawing(false)} />
+          </Row>
+        </View>
+      ) : null}
 
       {canMove && moving && e.kind === 'schedule' && onReschedule ? (
         <View style={{ gap: space.sm }}>
