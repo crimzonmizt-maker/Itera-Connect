@@ -2,6 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { dismissUntil, mustSnooze, type SuggestionState } from '../concierge/dismissals';
 import type { Suggestion } from '../concierge/rules';
+import {
+  customSnooze,
+  maxSnoozeDays,
+  snoozeOptions,
+  snoozeReason,
+  type SnoozeOption,
+} from '../concierge/snooze';
 import { addDays, shortDate } from '../model/format';
 import type { Id, IsoDate, NewEvent, ProjectMember } from '../model/types';
 import { audienceLabel } from '../model/visibility';
@@ -10,12 +17,13 @@ import { space, type, type Palette } from './theme';
 import { useStyles, useTheme } from './ThemeContext';
 
 /**
- * What the concierge has noticed. It only proposes; the contractor posts, dismisses or snoozes.
+ * What the concierge has noticed. It only proposes; the contractor posts or snoozes.
  *
- * Dismissing is not deleting. It posts a business-only entry on the record, the card moves to
- * "Set aside" below with a Restore button, and — depending on how loud it was — it comes back
- * on its own: urgent the next day, attention after three, info only when restored. On or after
- * its due date a card cannot be plainly dismissed; the contractor picks a snooze instead.
+ * There is no Dismiss. A card is paused — for six hours if urgent, else 1 / 3 / 7 or a custom
+ * number of days — and the choices are capped by the calendar (`concierge/snooze.ts`): nothing
+ * lands on or after the deadline, and a choice inside the day before it asks for a
+ * confirmation. The pause is a business-only entry on the record, the card moves to "Set
+ * aside" below with a Restore button, and it comes back on its own when the pause runs out.
  *
  * Cards show one at a time — a summary strip ("2 urgent · 3 to look at · 2 for information"),
  * then ‹ 1 of 7 › — so a busy project does not open onto a wall of warnings. "Show all" lays
@@ -50,6 +58,10 @@ export function ConciergePanel({
   const { tones } = useTheme();
   const [expanded, setExpanded] = useState<string>();
   const [snoozing, setSnoozing] = useState<string>();
+  const [customDays, setCustomDays] = useState('');
+  const [customError, setCustomError] = useState<string>();
+  // A choice that lands inside the buffer before the deadline waits here for a confirmation.
+  const [confirming, setConfirming] = useState<{ id: string; option: SnoozeOption }>();
   const [showArchive, setShowArchive] = useState(false);
   const [lastDismissed, setLastDismissed] = useState<Suggestion>();
   const [showAll, setShowAll] = useState(false);
@@ -74,6 +86,7 @@ export function ConciergePanel({
     action: 'dismiss' | 'restore' | 'acted',
     until?: IsoDate,
     reason?: string,
+    snooze?: SnoozeOption,
   ) =>
     onPost({
       projectId,
@@ -84,21 +97,25 @@ export function ConciergePanel({
       action,
       until,
       reason,
+      snooze: snooze
+        ? { hours: snooze.hours, days: snooze.days, cutsClose: snooze.cutsClose }
+        : undefined,
       audience: [],
     });
 
-  const dismiss = async (s: Suggestion) => {
-    await record(s, 'dismiss', dismissUntil(s, now));
-    setLastDismissed(s);
+  /** Pick a pause. One that cuts close is held for a confirmation first. */
+  const pick = (s: Suggestion, option: SnoozeOption) => {
+    if (option.cutsClose && confirming?.option.until !== option.until) {
+      setConfirming({ id: s.id, option });
+      return;
+    }
+    void snooze(s, option);
   };
-  const snooze = async (s: Suggestion, days: number) => {
-    await record(
-      s,
-      'dismiss',
-      addDays(now, days),
-      `Snoozed ${days} day${days === 1 ? '' : 's'} past its due date`,
-    );
+  const snooze = async (s: Suggestion, option: SnoozeOption) => {
+    await record(s, 'dismiss', option.until, snoozeReason(option, s), option);
     setSnoozing(undefined);
+    setConfirming(undefined);
+    setCustomDays('');
     setLastDismissed(s);
   };
   const restore = async (s: Suggestion) => {
@@ -181,6 +198,8 @@ export function ConciergePanel({
         const tone = tones.severity[s.severity];
         const open = expanded === s.id;
         const pastDue = mustSnooze(s, now);
+        const options = snoozeOptions(s, now);
+        const maxDays = maxSnoozeDays(s, now);
         return (
           <Card key={s.id} tone={tone} style={{ gap: 6 }} focusKey={`suggestion:${s.id}`}>
             <Row wrap>
@@ -254,21 +273,84 @@ export function ConciergePanel({
             {snoozing === s.id ? (
               <View style={styles.draft}>
                 <Text style={styles.draftLabel}>
-                  This is due{s.dueBy ? ` ${shortDate(s.dueBy)}` : ''}. Dismissing is off; pick how
-                  long to put it off — that choice goes on the record.
+                  {s.dueBy
+                    ? `Due ${shortDate(s.dueBy)}. Pause it until when? The choice goes on the record, and the card comes back on its own.`
+                    : 'Pause it until when? The choice goes on the record, and the card comes back on its own.'}
                 </Text>
-                <Row wrap>
-                  {[1, 3, 7].map((d) => (
-                    <Button
-                      key={d}
-                      title={`${d} day${d === 1 ? '' : 's'}`}
-                      kind="secondary"
-                      glyph="◷"
-                      onPress={() => void snooze(s, d)}
-                    />
-                  ))}
-                  <Button title="Cancel" kind="quiet" onPress={() => setSnoozing(undefined)} />
-                </Row>
+                {confirming?.id === s.id ? (
+                  <View style={styles.confirmBox}>
+                    <Text style={styles.draftLabel}>
+                      ▲ That is inside the day before it is due ({shortDate(s.dueBy!)}). Pause it
+                      anyway?
+                    </Text>
+                    <Row wrap>
+                      <Button
+                        title={`Yes, pause ${confirming.option.label}`}
+                        glyph="◷"
+                        onPress={() => void snooze(s, confirming.option)}
+                      />
+                      <Button title="No" kind="quiet" onPress={() => setConfirming(undefined)} />
+                    </Row>
+                  </View>
+                ) : (
+                  <>
+                    <Row wrap>
+                      {options.map((o) => (
+                        <Button
+                          key={o.label}
+                          title={o.cutsClose ? `${o.label} ▲` : o.label}
+                          kind="secondary"
+                          glyph="◷"
+                          onPress={() => pick(s, o)}
+                        />
+                      ))}
+                      {options.length === 0 ? (
+                        <Muted>
+                          {pastDue
+                            ? 'Past due — nothing to pause; reschedule the date.'
+                            : 'Due too soon for a preset pause.'}
+                        </Muted>
+                      ) : null}
+                    </Row>
+                    {s.severity !== 'urgent' && (maxDays === undefined || maxDays > 0) ? (
+                      <Row wrap style={{ alignItems: 'flex-end' }}>
+                        <View style={{ width: 120 }}>
+                          <Field
+                            label={
+                              maxDays === undefined
+                                ? 'Custom days'
+                                : `Custom days (up to ${maxDays})`
+                            }
+                            value={customDays}
+                            onChangeText={setCustomDays}
+                            keyboardType="number-pad"
+                          />
+                        </View>
+                        <Button
+                          title="Pause"
+                          kind="secondary"
+                          glyph="◷"
+                          onPress={() => {
+                            const r = customSnooze(s, now, Number(customDays));
+                            if (r.ok) pick(s, r.option);
+                            else setCustomError(r.reason);
+                          }}
+                        />
+                      </Row>
+                    ) : null}
+                    {customError ? <Text style={styles.error}>{customError}</Text> : null}
+                    <Row wrap>
+                      <Button
+                        title="Cancel"
+                        kind="quiet"
+                        onPress={() => {
+                          setSnoozing(undefined);
+                          setCustomError(undefined);
+                        }}
+                      />
+                    </Row>
+                  </>
+                )}
               </View>
             ) : null}
             <Row wrap>
@@ -321,17 +403,17 @@ export function ConciergePanel({
                   />
                 )
               ) : null}
-              {pastDue ? (
-                snoozing === s.id ? null : (
-                  <Button
-                    title="Snooze…"
-                    kind="quiet"
-                    glyph="◷"
-                    onPress={() => setSnoozing(s.id)}
-                  />
-                )
-              ) : (
-                <Button title="Dismiss" kind="quiet" onPress={() => void dismiss(s)} />
+              {snoozing === s.id ? null : (
+                <Button
+                  title={s.severity === 'urgent' ? 'Pause 6 hours…' : 'Pause…'}
+                  kind="quiet"
+                  glyph="◷"
+                  onPress={() => {
+                    setCustomError(undefined);
+                    setConfirming(undefined);
+                    setSnoozing(s.id);
+                  }}
+                />
               )}
             </Row>
           </Card>
@@ -387,6 +469,14 @@ const makeStyles = (p: Palette) =>
     detail: { ...type.small, color: p.ink2 },
     draft: { backgroundColor: p.panelAlt, borderRadius: 8, padding: space.md, gap: 4 },
     draftLabel: { ...type.label, color: p.ink3 },
+    confirmBox: {
+      borderWidth: 1,
+      borderColor: p.amber,
+      borderRadius: 8,
+      padding: space.sm,
+      gap: 4,
+    },
+    error: { ...type.small, color: p.ink },
     draftBody: { ...type.small, color: p.ink },
     undoBar: {
       justifyContent: 'space-between',

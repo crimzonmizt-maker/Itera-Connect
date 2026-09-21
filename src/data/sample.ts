@@ -1,7 +1,7 @@
 // Fictional sample project used when no Supabase configuration is present.
 // Names, prices and part numbers are made up.
 import { addDays } from '../model/format';
-import type { Id, Item, Project, ProjectEvent, ProjectMember } from '../model/types';
+import type { Id, Item, Project, ProjectEvent, ProjectMember, Room } from '../model/types';
 
 export const NOW = '2026-09-19T17:00:00.000Z';
 const d = (days: number) => addDays(NOW, days);
@@ -52,6 +52,18 @@ export const sampleMembers: ProjectMember[] = [
   },
 ];
 
+export const sampleRooms: Room[] = [
+  {
+    id: 'room-primary-bath',
+    projectId: sampleProject.id,
+    name: 'Primary bath',
+    type: 'bathroom',
+    typeConfirmed: true,
+    createdAt: d(-24),
+  },
+];
+const PRIMARY_BATH: Id = 'room-primary-bath';
+
 const BOTH: Id[] = [HOMEOWNER.userId, HOMEOWNER_2.userId];
 const DANA: Id[] = [HOMEOWNER.userId];
 const TEAM: Id[] = [];
@@ -61,7 +73,7 @@ export const sampleItems: Item[] = [
     id: 'item-vanity',
     projectId: sampleProject.id,
     name: 'Cape Breton 48" vanity, white oak',
-    room: 'Primary bath',
+    roomId: PRIMARY_BATH,
     quantity: 1,
     unit: 'each',
     status: 'ordered',
@@ -82,7 +94,7 @@ export const sampleItems: Item[] = [
     id: 'item-floor-tile',
     projectId: sampleProject.id,
     name: 'Hanoi 12×24 porcelain floor tile',
-    room: 'Primary bath',
+    roomId: PRIMARY_BATH,
     quantity: 14,
     unit: 'box',
     status: 'delivered',
@@ -102,7 +114,7 @@ export const sampleItems: Item[] = [
     id: 'item-shower-glass',
     projectId: sampleProject.id,
     name: 'Frameless shower enclosure, 60"',
-    room: 'Primary bath',
+    roomId: PRIMARY_BATH,
     quantity: 1,
     unit: 'each',
     status: 'proposed',
@@ -115,7 +127,7 @@ export const sampleItems: Item[] = [
     id: 'item-grout',
     projectId: sampleProject.id,
     name: 'Grout — Warm Gray, sanded',
-    room: 'Primary bath',
+    roomId: PRIMARY_BATH,
     quantity: 3,
     unit: 'bag',
     status: 'proposed',

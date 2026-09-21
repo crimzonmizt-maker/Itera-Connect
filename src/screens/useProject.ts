@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { partitionSuggestions } from '../concierge/dismissals';
 import { allSuggestions } from '../concierge/rules';
-import type { ItemInput, ProjectRepository } from '../data/repository';
+import type { ItemInput, ProjectRepository, RoomInput } from '../data/repository';
 import { approvals, openApprovals, projectProgress } from '../model/progress';
 import type {
   Id,
@@ -10,6 +10,7 @@ import type {
   Project,
   ProjectEvent,
   ProjectMember,
+  Room,
   Viewer,
   Decision,
 } from '../model/types';
@@ -24,23 +25,26 @@ export function useProject(
   const [project, setProject] = useState<Project>();
   const [events, setEvents] = useState<ProjectEvent[]>([]);
   const [items, setItems] = useState<Item[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]);
   const [members, setMembers] = useState<ProjectMember[]>([]);
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
-      const [v, p, e, i, m] = await Promise.all([
+      const [v, p, e, i, r, m] = await Promise.all([
         repo.viewer(),
         repo.getProject(projectId),
         repo.listEvents(projectId),
         repo.listItems(projectId),
+        repo.listRooms(projectId),
         repo.listMembers(projectId),
       ]);
       setViewer(v);
       setProject(p);
       setEvents(e);
       setItems(i);
+      setRooms(r);
       setMembers(m);
       setError(undefined);
     } catch (err) {
@@ -85,6 +89,7 @@ export function useProject(
     project,
     events,
     items,
+    rooms,
     members,
     error,
     loading,
@@ -101,6 +106,11 @@ export function useProject(
     // Throws on failure so the form can show the error next to the field and stay open.
     saveItem: async (item: ItemInput) => {
       const saved = await repo.upsertItem(projectId, item);
+      await refresh();
+      return saved;
+    },
+    saveRoom: async (room: RoomInput) => {
+      const saved = await repo.upsertRoom(projectId, room);
       await refresh();
       return saved;
     },

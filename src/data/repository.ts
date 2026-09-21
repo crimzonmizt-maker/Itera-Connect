@@ -7,6 +7,8 @@ import type {
   Project,
   ProjectEvent,
   ProjectMember,
+  Room,
+  RoomType,
   Viewer,
   Decision,
 } from '../model/types';
@@ -19,6 +21,12 @@ export type NewProject = {
   mode: EngagementMode;
   targetDate?: string;
 };
+
+/**
+ * A room as the contractor edits it. No id = create. A type given here is the contractor's
+ * word, so it is confirmed; leave it out and the repository guesses from the name (unconfirmed).
+ */
+export type RoomInput = { id?: Id; name: string; type?: RoomType };
 
 /** An item as the contractor edits it. No id = create; with id = update that item. */
 export type ItemInput = Omit<Item, 'id' | 'projectId'> & { id?: Id };
@@ -33,6 +41,8 @@ export interface ProjectRepository {
   listProjects(): Promise<Project[]>;
   getProject(projectId: Id): Promise<Project | undefined>;
   listMembers(projectId: Id): Promise<ProjectMember[]>;
+  /** Rooms have nothing to hide: every member of the project sees the same list. */
+  listRooms(projectId: Id): Promise<Room[]>;
   listItems(projectId: Id): Promise<Item[]>;
   listEvents(projectId: Id): Promise<ProjectEvent[]>;
   /** Homeowners may only post to an audience that includes themselves; the repository enforces it. */
@@ -55,6 +65,8 @@ export interface ProjectRepository {
   createProject(input: NewProject, businessName?: string): Promise<Project>;
   /** Contractor only. Team fields are stored; the homeowner's copy is redacted on read. */
   upsertItem(projectId: Id, item: ItemInput): Promise<Item>;
+  /** Contractor only. Creating a room with a type-less name guesses the type and marks it unconfirmed. */
+  upsertRoom(projectId: Id, room: RoomInput): Promise<Room>;
   /** Called when data changes from this device or another. Returns an unsubscribe. */
   subscribe(projectId: Id, onChange: () => void): () => void;
 }

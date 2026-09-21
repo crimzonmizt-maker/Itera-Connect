@@ -35,17 +35,17 @@ applies the same visibility rules the database enforces, so what you see is what
 homeowner would see — including that Sam does not see the approval that was addressed to Dana.
 
 To run against a real backend, copy `.env.example` to `.env.local`, fill in an `https://*.supabase.co`
-URL and an `sb_publishable_*` key, and apply `supabase/migrations/20260920_foundation.sql`.
+URL and an `sb_publishable_*` key, and apply the files in `supabase/migrations/` in order.
 Configure `public.ic_before_user_created` as the **Before User Created** auth hook and add
-contractor addresses to `ic_approved_contractors`. `supabase/tests/run.sh` applies the migration
-and runs `supabase/tests/foundation.sql`, which proves the rules that matter most (below) against
+contractor addresses to `ic_approved_contractors`. `supabase/tests/run.sh` applies the migrations
+and runs the checks in `supabase/tests/`, which prove the rules that matter most (below) against
 a real Postgres. CI does this on every push; locally point `DATABASE_URL` at a scratch database,
 never production.
 
 ## How it is put together
 
 ```
-src/model/        the shared record: types, visibility rules, progress/approvals derived from events
+src/model/        the shared record: types, visibility rules, rooms, progress/approvals derived from events
 src/concierge/    rules that read the event spine and propose (overdue approvals, lead-time
                   collisions, short deliveries, weekly digest draft). Pure functions, tested.
 src/data/         ProjectRepository interface; LocalRepository (sample data) and
@@ -67,6 +67,12 @@ Rules the code keeps:
   only. A badge always says _who_ ("Shared with Dana, Sam"), never just "shared". A decision is
   seen by exactly the people who were asked. Homeowners cannot pick an audience: their posts go
   to the team and every homeowner on the project.
+- **Rooms are records, not labels.** A project has rooms; items point at one (or none — a permit
+  has no room). The contractor names a room however they like; the app keeps a separate `type`
+  (bathroom, kitchen, …) for lookups, guessed from the name and marked as a guess until the
+  contractor confirms it. Nothing is ever decided on an unconfirmed guess. Rooms are where the
+  task hierarchy (project → room → task) and, later, a contractor's usual materials per room
+  type will hang — the profile itself is deliberately not built yet. (`model/rooms.ts`)
 - **Items follow the buyer.** Each project has an engagement mode (`all_in`, `labor_only`,
   `hybrid`) that sets the default for who purchases and whether client prices show; each item can
   override it. A homeowner sees supplier, SKU, order number and lead time only for items _they_

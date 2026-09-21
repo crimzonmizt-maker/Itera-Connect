@@ -2,6 +2,7 @@
 // configured, and by the tests. It applies the same visibility rules the database does,
 // so a screen behaves identically against either backend.
 import { addDays, newId, newInviteCode } from '../model/format';
+import { guessRoomType } from '../model/rooms';
 import type {
   Id,
   Invitation,
@@ -11,11 +12,12 @@ import type {
   ProjectEvent,
   ProjectMember,
   Role,
+  Room,
   Viewer,
   Decision,
 } from '../model/types';
 import { homeownerIds, modeDefaults, redactItems, visibleEvents } from '../model/visibility';
-import type { ItemInput, NewProject, ProjectRepository } from './repository';
+import type { ItemInput, NewProject, ProjectRepository, RoomInput } from './repository';
 import {
   CONTRACTOR,
   HOMEOWNER,
@@ -25,6 +27,7 @@ import {
   sampleItems,
   sampleMembers,
   sampleProject,
+  sampleRooms,
 } from './sample';
 
 const HOMEOWNER_KINDS = new Set(['note', 'photo', 'approval_decided']);
@@ -32,6 +35,7 @@ const HOMEOWNER_KINDS = new Set(['note', 'photo', 'approval_decided']);
 export class LocalRepository implements ProjectRepository {
   private events: ProjectEvent[];
   private items: Item[];
+  private rooms: Room[];
   private members: ProjectMember[];
   private projects: Project[];
   private invitations: Invitation[] = [];
@@ -45,6 +49,7 @@ export class LocalRepository implements ProjectRepository {
       clock?: () => string;
       events?: ProjectEvent[];
       items?: Item[];
+      rooms?: Room[];
       project?: Project;
     } = {},
   ) {
@@ -57,6 +62,7 @@ export class LocalRepository implements ProjectRepository {
     this.clock = options.clock ?? (() => new Date().toISOString());
     this.events = structuredClone(options.events ?? sampleEvents);
     this.items = structuredClone(options.items ?? sampleItems);
+    this.rooms = structuredClone(options.rooms ?? sampleRooms);
     this.projects = [structuredClone(options.project ?? sampleProject)];
     this.members = structuredClone(sampleMembers);
   }
@@ -91,6 +97,10 @@ export class LocalRepository implements ProjectRepository {
   }
   async listMembers(projectId: Id): Promise<ProjectMember[]> {
     return this.members.filter((m) => m.projectId === projectId);
+  }
+  async listRooms(projectId: Id): Promise<Room[]> {
+    if (!(await this.getProject(projectId))) return [];
+    return structuredClone(this.rooms.filter((r) => r.projectId === projectId));
   }
   async listItems(projectId: Id): Promise<Item[]> {
     const v = await this.viewer();
@@ -284,6 +294,11 @@ export class LocalRepository implements ProjectRepository {
       ? this.items.find((i) => i.id === id && i.projectId === projectId)
       : undefined;
     if (id && !existing) throw new Error('That item was not found.');
+    if (
+      fields.roomId !== undefined &&
+      !this.rooms.some((r) => r.id === fields.roomId && r.projectId === projectId)
+    )
+      throw new Error('That room is not on this project.');
     const item: Item = {
       ...fields,
       id: existing?.id ?? newId('item'),
@@ -294,6 +309,38 @@ export class LocalRepository implements ProjectRepository {
     else this.items.push(item);
     this.notify();
     return structuredClone(item);
+  }
+
+  async upsertRoom(projectId: Id, input: RoomInput): Promise<Room> {
+    const v = await this.viewer();
+    if (v.role !== 'contractor') throw new Error('Only the contractor can edit rooms.');
+    if (!(await this.getProject(projectId))) throw new Error('That project was not found.');
+    const name = input.name.trim();
+    if (!name) throw new Error('Give the room a name.');
+    const existing = input.id
+      ? this.rooms.find((r) => r.id === input.id && r.projectId === projectId)
+      : undefined;
+    if (input.id && !existing) throw new Error('That room was not found.');
+    const duplicate = this.rooms.find(
+      (r) =>
+        r.projectId === projectId &&
+        r.id !== existing?.id &&
+        r.name.toLowerCase() === name.toLowerCase(),
+    );
+    if (duplicate) throw new Error(`There is already a room called “${duplicate.name}”.`);
+    // A type the contractor typed is their word. Otherwise keep a confirmed type, or guess.
+    const room: Room = {
+      id: existing?.id ?? newId('room'),
+      projectId,
+      name,
+      type: input.type ?? (existing?.typeConfirmed ? existing.type : guessRoomType(name)),
+      typeConfirmed: input.type !== undefined || (existing?.typeConfirmed ?? false),
+      createdAt: existing?.createdAt ?? this.clock(),
+    };
+    if (existing) Object.assign(existing, room);
+    else this.rooms.push(room);
+    this.notify();
+    return structuredClone(room);
   }
 
   subscribe(_projectId: Id, onChange: () => void) {

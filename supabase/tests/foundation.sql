@@ -159,6 +159,23 @@ select public.ic_append_event(:'project_id', 'dismissal',
 do $$ begin
   assert (select audience from public.ic_events where kind = 'dismissal') = '{}'::uuid[], 'dismissal audience forced empty';
 end $$;
+-- A pause (a dismissal with `until` and the snooze detail, cuts-close answer included) is
+-- accepted with its extra fields and is just as invisible to the homeowner.
+select public.ic_append_event(:'project_id', 'dismissal', '{}', 'Reminder paused until Sep 24 — due Sep 25 (cuts close; confirmed)',
+  '{"suggestionId":"order:tile","title":"Order the tile","severity":"attention","action":"dismiss","until":"2026-09-24T17:00:00Z","snooze":{"days":3,"cutsClose":true}}');
+reset role;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000d001","role":"authenticated"}', true);
+set local role authenticated;
+do $$ begin
+  assert (select count(*) from public.ic_events where kind = 'dismissal') = 0, 'a pause never reaches a homeowner';
+  assert (select count(*) from public.ic_events where body like 'Reminder paused%') = 0, 'nor its wording';
+end $$;
+reset role;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000c001","role":"authenticated"}', true);
+set local role authenticated;
+do $$ begin
+  assert (select data->'snooze'->>'cutsClose' from public.ic_events where data->>'suggestionId' = 'order:tile') = 'true', 'the cuts-close answer is on the record';
+end $$;
 do $$
 declare v_project uuid := (select id from public.ic_projects limit 1);
 begin
@@ -302,7 +319,7 @@ reset role;
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000c001","role":"authenticated"}', true);
 set local role authenticated;
 do $$ begin
-  assert (select count(*) from public.ic_events) = 15, 'contractor sees every entry';
+  assert (select count(*) from public.ic_events) = 16, 'contractor sees every entry';
   assert (select bool_and(audience = array['00000000-0000-0000-0000-00000000d001']::uuid[]) from public.ic_events where kind = 'approval_decided'),
        'decision audience copied from the request';
   assert (select array_length(audience, 1) from public.ic_events where kind = 'note' and author_role = 'homeowner') = 2,

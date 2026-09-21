@@ -39,6 +39,7 @@ export function HomeownerHome({ state }: { state: ProjectState }) {
     project,
     events,
     items,
+    rooms,
     members,
     viewer,
     progress,
@@ -89,6 +90,7 @@ export function HomeownerHome({ state }: { state: ProjectState }) {
         </SectionTitle>
         <ItemsTable
           items={items}
+          rooms={rooms}
           events={events}
           approvals={approvals}
           project={project}

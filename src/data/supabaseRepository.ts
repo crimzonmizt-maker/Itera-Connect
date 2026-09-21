@@ -2,6 +2,7 @@
 // Reads go through tables and the ic_items_v view (RLS and the view filter by role and
 // audience); writes go through the ic_* functions.
 import { newInviteCode } from '../model/format';
+import { guessRoomType } from '../model/rooms';
 import type {
   Id,
   Invitation,
@@ -12,10 +13,11 @@ import type {
   ProjectMember,
   Reply,
   Role,
+  Room,
   Viewer,
   Decision,
 } from '../model/types';
-import type { ItemInput, NewProject, ProjectRepository } from './repository';
+import type { ItemInput, NewProject, ProjectRepository, RoomInput } from './repository';
 import { supabase } from './supabaseClient';
 
 type Row = Record<string, unknown>;
@@ -39,6 +41,17 @@ function toProject(r: Row): Project {
   };
 }
 
+function toRoom(r: Row): Room {
+  return {
+    id: r.id as string,
+    projectId: r.project_id as string,
+    name: r.name as string,
+    type: str(r.type) as Room['type'],
+    typeConfirmed: bool(r.type_confirmed) ?? false,
+    createdAt: r.created_at as string,
+  };
+}
+
 /** From ic_items_v: the view has already nulled what this viewer may not see. */
 function toItem(r: Row): Item {
   const sourcing = {
@@ -52,7 +65,7 @@ function toItem(r: Row): Item {
     id: r.id as string,
     projectId: r.project_id as string,
     name: r.name as string,
-    room: str(r.room),
+    roomId: str(r.room_id),
     quantity: num(r.quantity) ?? 1,
     unit: str(r.unit),
     status: r.status as Item['status'],
@@ -163,6 +176,15 @@ export class SupabaseRepository implements ProjectRepository {
       role: r.role as Role,
       displayName: r.display_name as string,
     }));
+  }
+  async listRooms(projectId: Id): Promise<Room[]> {
+    const { data, error } = await supabase()
+      .from('ic_rooms')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('created_at');
+    if (error) throw error;
+    return (data ?? []).map((r) => toRoom(r as Row));
   }
   async listItems(projectId: Id): Promise<Item[]> {
     // The view decides, per row and per column, what this caller may see.
@@ -305,6 +327,22 @@ export class SupabaseRepository implements ProjectRepository {
     return toItem(row as Row);
   }
 
+  async upsertRoom(projectId: Id, room: RoomInput): Promise<Room> {
+    // The one list of name hints lives in the app; the database stores the guess as unconfirmed.
+    const { data: id, error } = await supabase().rpc('ic_upsert_room', {
+      p_project: projectId,
+      p_room: { ...room, guess: room.type ? undefined : guessRoomType(room.name) },
+    });
+    if (error) throw error;
+    const { data: row, error: readError } = await supabase()
+      .from('ic_rooms')
+      .select('*')
+      .eq('id', id as string)
+      .single();
+    if (readError) throw readError;
+    return toRoom(row as Row);
+  }
+
   subscribe(projectId: Id, onChange: () => void) {
     const channel = supabase()
       .channel(`project-${projectId}`)
@@ -317,6 +355,11 @@ export class SupabaseRepository implements ProjectRepository {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'ic_items', filter: `project_id=eq.${projectId}` },
+        onChange,
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'ic_rooms', filter: `project_id=eq.${projectId}` },
         onChange,
       )
       .subscribe();

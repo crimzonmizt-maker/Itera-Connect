@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import type { ItemInput } from '../data/repository';
 import { addDays, moneyInput, parseMoney, shortDate } from '../model/format';
-import type { Item, ItemStatus, Project, ProjectMember, Purchaser } from '../model/types';
+import type { Item, ItemStatus, Project, ProjectMember, Purchaser, Room } from '../model/types';
 import {
   modeDefaults,
   priceVisibleToHomeowner,
@@ -32,6 +32,8 @@ const STATUSES: ItemStatus[] = [
  */
 export type ItemSave = {
   item: ItemInput;
+  /** The contractor typed a room that does not exist yet; create it, then put the item in it. */
+  newRoom?: { name: string };
   order?: { expectedDate: string };
   delivery?: { expected: number; received: number; damaged: number };
 };
@@ -45,12 +47,14 @@ const UNITS = ['each', 'box', 'bag', 'sq ft', 'lin ft', 'sheet', 'gal'];
 export function ItemForm({
   project,
   members,
+  rooms,
   initial,
   onSave,
   onCancel,
 }: {
   project: Project;
   members: ProjectMember[];
+  rooms: Room[];
   initial?: Item;
   onSave: (save: ItemSave) => Promise<void>;
   onCancel: () => void;
@@ -59,7 +63,11 @@ export function ItemForm({
   const styles = useStyles(makeStyles);
   const defaults = modeDefaults(project.mode);
   const [name, setName] = useState(initial?.name ?? '');
-  const [room, setRoom] = useState(initial?.room ?? '');
+  // 'new' = the contractor is naming a room that is not on the project yet.
+  const [roomId, setRoomId] = useState<string>(
+    initial?.roomId ?? (rooms.length === 0 ? 'new' : (rooms[0]?.id ?? 'new')),
+  );
+  const [newRoomName, setNewRoomName] = useState('');
   const [quantity, setQuantity] = useState(String(initial?.quantity ?? 1));
   const [unit, setUnit] = useState(initial?.unit ?? 'each');
   const [status, setStatus] = useState<ItemStatus>(initial?.status ?? 'proposed');
@@ -102,8 +110,10 @@ export function ItemForm({
   const deliveryBad =
     becomingDelivered &&
     (Number.isNaN(recNum) || Number.isNaN(damNum) || recNum < 0 || damNum < 0 || damNum > recNum);
+  const roomBad = roomId === 'new' && newRoomName.trim() === '';
   const valid =
     name.trim().length > 0 &&
+    !roomBad &&
     !priceBad &&
     !costBad &&
     !qtyBad &&
@@ -122,7 +132,7 @@ export function ItemForm({
     const item: ItemInput = {
       id: initial?.id,
       name: name.trim(),
-      room: room.trim() || undefined,
+      roomId: roomId === 'new' || roomId === '' ? undefined : roomId,
       quantity: qty,
       unit: unit.trim() || undefined,
       status,
@@ -138,7 +148,11 @@ export function ItemForm({
 
   // What the homeowner will see, computed with the same rules the repository uses.
   const preview = build();
-  const asItem: Item = { ...preview, id: preview.id ?? 'preview', projectId: project.id };
+  const asItem: Item = {
+    ...preview,
+    id: preview.id ?? 'preview',
+    projectId: project.id,
+  };
   const showsPrice = priceVisibleToHomeowner(project, asItem) && priceCents !== undefined;
   const showsSourcing = sourcingVisibleToHomeowner(asItem) && asItem.sourcing !== undefined;
   const homeowners = members.filter((m) => m.role === 'homeowner');
@@ -163,8 +177,11 @@ export function ItemForm({
     try {
       await onSave({
         item: build(),
+        newRoom: roomId === 'new' ? { name: newRoomName.trim() } : undefined,
         order: becomingOrdered
-          ? { expectedDate: addDays(new Date().toISOString(), Number(arriveDays) || 0) }
+          ? {
+              expectedDate: addDays(new Date().toISOString(), Number(arriveDays) || 0),
+            }
           : undefined,
         delivery: becomingDelivered
           ? { expected: qty, received: recNum, damaged: damNum }
@@ -188,10 +205,29 @@ export function ItemForm({
         placeholder='e.g. Cape Breton 48" vanity, white oak'
         autoFocus
       />
-      <Row wrap style={{ gap: space.md, alignItems: 'flex-start' }}>
-        <View style={{ flexGrow: 1, minWidth: 140 }}>
-          <Field label="Room" value={room} onChangeText={setRoom} placeholder="Primary bath" />
+      <Choice
+        label="Room"
+        options={[
+          ...rooms.map((r) => ({ value: r.id, label: r.name })),
+          { value: 'new', label: 'New room…', glyph: '+' },
+          { value: '', label: 'No room' },
+        ]}
+        value={roomId}
+        onChange={setRoomId}
+        hint="Rooms group the selections and, later, the tasks. A permit or a dumpster has no room."
+      />
+      {roomId === 'new' ? (
+        <View style={{ maxWidth: 320 }}>
+          <Field
+            label="New room"
+            value={newRoomName}
+            onChangeText={setNewRoomName}
+            placeholder="e.g. Jack and Jill upstairs"
+            autoFocus
+          />
         </View>
+      ) : null}
+      <Row wrap style={{ gap: space.md, alignItems: 'flex-start' }}>
         <View style={{ width: 90 }}>
           <Field
             label="Quantity"
@@ -276,7 +312,11 @@ export function ItemForm({
       <Choice
         label="Who buys it"
         options={[
-          { value: 'contractor' as Purchaser, label: 'I supply it', glyph: '⚒' },
+          {
+            value: 'contractor' as Purchaser,
+            label: 'I supply it',
+            glyph: '⚒',
+          },
           {
             value: 'homeowner' as Purchaser,
             label: `${who} ${homeowners.length > 1 ? 'buy' : 'buys'} it`,
@@ -429,9 +469,24 @@ const makeStyles = (p: Palette) =>
       padding: space.md,
       gap: space.sm,
     },
-    team: { backgroundColor: p.amberSoft, borderRadius: 8, padding: space.md, gap: space.sm },
-    eventBox: { backgroundColor: p.accentSoft, borderRadius: 8, padding: space.md, gap: space.sm },
-    preview: { backgroundColor: p.tealSoft, borderRadius: 8, padding: space.md, gap: 4 },
+    team: {
+      backgroundColor: p.amberSoft,
+      borderRadius: 8,
+      padding: space.md,
+      gap: space.sm,
+    },
+    eventBox: {
+      backgroundColor: p.accentSoft,
+      borderRadius: 8,
+      padding: space.md,
+      gap: space.sm,
+    },
+    preview: {
+      backgroundColor: p.tealSoft,
+      borderRadius: 8,
+      padding: space.md,
+      gap: 4,
+    },
     previewText: { ...type.small, color: p.ink },
     error: { ...type.small, color: p.amber, fontWeight: '600' },
   });

@@ -74,8 +74,10 @@ export function partitionSuggestions(
     let hidden = false;
     let returnsAt: IsoDate | undefined;
     if (last && last.action !== 'restore') {
+      // Compared to the minute, not the day: an urgent card paused for six hours must hide now
+      // and be back this evening, not tomorrow.
       if (last.until === undefined) hidden = true;
-      else if (daysBetween(last.until, now) < 0) {
+      else if (new Date(now).getTime() < new Date(last.until).getTime()) {
         hidden = true;
         returnsAt = last.until;
       }

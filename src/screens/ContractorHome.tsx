@@ -33,6 +33,7 @@ export function ContractorHome({ state }: { state: ProjectState }) {
     project,
     events,
     items,
+    rooms,
     members,
     viewer,
     progress,
@@ -43,6 +44,7 @@ export function ContractorHome({ state }: { state: ProjectState }) {
     decide,
     invite,
     saveItem,
+    saveRoom,
     now,
   } = state;
   const [tab, setTab] = useState<Tab>('overview');
@@ -175,8 +177,11 @@ export function ContractorHome({ state }: { state: ProjectState }) {
             key={editing === 'new' ? 'new' : editing.id}
             project={project}
             members={members}
+            rooms={rooms}
             initial={editing === 'new' ? undefined : editing}
-            onSave={async ({ item, order, delivery }) => {
+            onSave={async ({ item, newRoom, order, delivery }) => {
+              // A room named in the form is created first, so the item can point at it.
+              if (newRoom) item.roomId = (await saveRoom({ name: newRoom.name })).id;
               const saved = await saveItem(item);
               // A status change to ordered / delivered goes on the record as an entry, so the
               // expected date and the count are visible to everyone and checkable by the concierge.
@@ -232,6 +237,7 @@ export function ContractorHome({ state }: { state: ProjectState }) {
         )}
         <ItemsTable
           items={items}
+          rooms={rooms}
           events={events}
           approvals={approvals}
           project={project}

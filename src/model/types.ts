@@ -42,6 +42,33 @@ export type Project = {
   createdAt: IsoDate;
 };
 
+/**
+ * A room on the project. The contractor names it however they like ("Jack and Jill upstairs",
+ * "the back room"); `type` is what the app uses to look things up — later, a contractor's
+ * usual materials for a bathroom. A guessed type is a guess until the contractor confirms it,
+ * and the app never acts on a guess without asking.
+ */
+export type RoomType =
+  | 'bathroom'
+  | 'kitchen'
+  | 'bedroom'
+  | 'living'
+  | 'laundry'
+  | 'basement'
+  | 'garage'
+  | 'exterior'
+  | 'other';
+
+export type Room = {
+  id: Id;
+  projectId: Id;
+  name: string;
+  type?: RoomType;
+  /** True once the contractor chose or confirmed the type; false while it is only guessed from the name. */
+  typeConfirmed: boolean;
+  createdAt: IsoDate;
+};
+
 export type ProjectMember = {
   projectId: Id;
   userId: Id;
@@ -73,7 +100,8 @@ export type Item = {
   id: Id;
   projectId: Id;
   name: string;
-  room?: string;
+  /** The room this item belongs to. Optional: a permit or a dumpster is not in a room. */
+  roomId?: Id;
   quantity: number;
   unit?: string; // "each", "box", "sq ft"
   /** changes_requested: the homeowner asked for a change; the contractor revises and re-requests. */
@@ -199,6 +227,8 @@ export type ProjectEvent = EventBase &
         /** When the suggestion may show again if still open. Absent = not until restored. */
         until?: IsoDate;
         reason?: string;
+        /** For a snooze: what was picked, and whether the contractor confirmed it cut close to the deadline. */
+        snooze?: { hours?: number; days?: number; cutsClose: boolean };
       }
   );
 

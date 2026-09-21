@@ -3,7 +3,8 @@ import { StyleSheet, Text, View } from 'react-native';
 import { money, shortDate } from '../model/format';
 import { arrivalOf, collisionFor, expectedOnSite, type Arrival } from '../model/logistics';
 import { isOpen, type Approval } from '../model/progress';
-import type { IsoDate, Item, Project, ProjectEvent, Role } from '../model/types';
+import { roomTypeLabel } from '../model/rooms';
+import type { IsoDate, Item, Project, ProjectEvent, Role, Room } from '../model/types';
 import { priceVisibleToHomeowner, sourcingVisibleToHomeowner } from '../model/visibility';
 import { Badge, Button, Card, Muted, RefLink, Row } from './primitives';
 import { space, type, type Palette } from './theme';
@@ -23,6 +24,7 @@ import { useStyles, useTheme } from './ThemeContext';
  */
 export function ItemsTable({
   items,
+  rooms,
   events,
   approvals,
   project,
@@ -32,6 +34,7 @@ export function ItemsTable({
   onRequestApproval,
 }: {
   items: Item[];
+  rooms: Room[];
   events: ProjectEvent[];
   approvals: Approval[];
   project: Pick<Project, 'showPrices'>;
@@ -55,125 +58,161 @@ export function ItemsTable({
   const priced = items.filter((i) => i.clientPrice !== undefined);
   const total = priced.reduce((sum, i) => sum + (i.clientPrice ?? 0), 0);
   const hidden = items.length - priced.length;
+  // Items sit under their room, in the order the rooms were added; anything without a room last.
+  const groups: { room?: Room; items: Item[] }[] = [
+    ...rooms.map((room) => ({
+      room,
+      items: items.filter((i) => i.roomId === room.id),
+    })),
+    { items: items.filter((i) => !rooms.some((r) => r.id === i.roomId)) },
+  ].filter((g) => g.items.length > 0);
   return (
     <View style={{ gap: space.sm }}>
-      {items.map((item) => {
-        const arrival = arrivalOf(item, events);
-        const collision = collisionFor(item, events, now);
-        const approval = approvals.find((a) => a.itemId === item.id && isOpen(a));
-        const canAsk =
-          onRequestApproval &&
-          viewerRole === 'contractor' &&
-          (item.status === 'proposed' || item.status === 'changes_requested') &&
-          !(approval && approval.decision === undefined); // one live request at a time
-        return (
-          <Card key={item.id} style={{ gap: 6 }} focusKey={`item:${item.id}`}>
-            <Row style={{ justifyContent: 'space-between' }} wrap>
-              <Text style={styles.name}>{item.name}</Text>
-              <Row wrap>
-                <Badge tone={tones.itemStatus[item.status]} />
-                {canAsk ? (
-                  <Button
-                    title={item.status === 'changes_requested' ? 'Ask again' : 'Ask for approval'}
-                    kind="quiet"
-                    glyph="?"
-                    onPress={() => onRequestApproval(item)}
-                  />
-                ) : null}
-                {onEdit && viewerRole === 'contractor' ? (
-                  <Button title="Edit" kind="quiet" glyph="✎" onPress={() => onEdit(item)} />
-                ) : null}
-              </Row>
-            </Row>
-            {approval ? (
-              <Muted>
-                {approval.decision === 'changes_requested'
-                  ? `${approval.decidedBy?.split(' ')[0] ?? 'Homeowner'} asked for changes ${shortDate(approval.decidedAt ?? now)}${approval.decisionNote ? `: “${approval.decisionNote}”` : ''} · `
-                  : `Approval requested ${shortDate(approval.requestedAt)}${approval.dueBy ? `, decide by ${shortDate(approval.dueBy)}` : ''} · `}
-                <RefLink
-                  to={{ kind: 'event', id: approval.decidedEventId ?? approval.requestedEventId }}
-                >
-                  open
-                </RefLink>
-              </Muted>
-            ) : null}
-            <ArrivalLine arrival={arrival} collision={collision} item={item} />
-            <Row wrap style={{ gap: space.lg }}>
-              <Muted>
-                {item.quantity} {item.unit ?? ''}
-              </Muted>
-              {item.room ? <Muted>{item.room}</Muted> : null}
-              <Badge tone={tones.purchaser[item.purchasedBy]} />
-              {item.clientPrice !== undefined ? (
-                <Text style={styles.price}>{money(item.clientPrice)}</Text>
-              ) : viewerRole === 'homeowner' ? (
-                <Muted>Included in your contract</Muted>
+      {groups.map((group) => (
+        <React.Fragment key={group.room?.id ?? 'no-room'}>
+          {groups.length > 1 || group.room ? (
+            <Row
+              wrap
+              style={{
+                gap: space.sm,
+                alignItems: 'baseline',
+                marginTop: space.xs,
+              }}
+            >
+              <Text style={styles.roomName}>{group.room?.name ?? 'Not in a room'}</Text>
+              {group.room ? (
+                <Muted>
+                  {roomTypeLabel(group.room.type) ?? 'type not set'}
+                  {group.room.type && !group.room.typeConfirmed ? ' (guessed)' : ''}
+                </Muted>
               ) : null}
             </Row>
-
-            {item.sourcing ? (
-              <View style={styles.sourcing}>
-                <Text style={styles.sourcingLabel}>{sourcingLabel(item, viewerRole)}</Text>
+          ) : null}
+          {group.items.map((item) => {
+            const arrival = arrivalOf(item, events);
+            const collision = collisionFor(item, events, now);
+            const approval = approvals.find((a) => a.itemId === item.id && isOpen(a));
+            const canAsk =
+              onRequestApproval &&
+              viewerRole === 'contractor' &&
+              (item.status === 'proposed' || item.status === 'changes_requested') &&
+              !(approval && approval.decision === undefined); // one live request at a time
+            return (
+              <Card key={item.id} style={{ gap: 6 }} focusKey={`item:${item.id}`}>
+                <Row style={{ justifyContent: 'space-between' }} wrap>
+                  <Text style={styles.name}>{item.name}</Text>
+                  <Row wrap>
+                    <Badge tone={tones.itemStatus[item.status]} />
+                    {canAsk ? (
+                      <Button
+                        title={
+                          item.status === 'changes_requested' ? 'Ask again' : 'Ask for approval'
+                        }
+                        kind="quiet"
+                        glyph="?"
+                        onPress={() => onRequestApproval(item)}
+                      />
+                    ) : null}
+                    {onEdit && viewerRole === 'contractor' ? (
+                      <Button title="Edit" kind="quiet" glyph="✎" onPress={() => onEdit(item)} />
+                    ) : null}
+                  </Row>
+                </Row>
+                {approval ? (
+                  <Muted>
+                    {approval.decision === 'changes_requested'
+                      ? `${approval.decidedBy?.split(' ')[0] ?? 'Homeowner'} asked for changes ${shortDate(approval.decidedAt ?? now)}${approval.decisionNote ? `: “${approval.decisionNote}”` : ''} · `
+                      : `Approval requested ${shortDate(approval.requestedAt)}${approval.dueBy ? `, decide by ${shortDate(approval.dueBy)}` : ''} · `}
+                    <RefLink
+                      to={{
+                        kind: 'event',
+                        id: approval.decidedEventId ?? approval.requestedEventId,
+                      }}
+                    >
+                      open
+                    </RefLink>
+                  </Muted>
+                ) : null}
+                <ArrivalLine arrival={arrival} collision={collision} item={item} />
                 <Row wrap style={{ gap: space.lg }}>
-                  {item.sourcing.supplier ? <Cell k="Supplier" v={item.sourcing.supplier} /> : null}
-                  {item.sourcing.sku ? <Cell k="SKU" v={item.sourcing.sku} mono /> : null}
-                  {item.sourcing.orderNumber ? (
-                    <Cell k="Order #" v={item.sourcing.orderNumber} mono />
-                  ) : null}
-                  {item.sourcing.leadTimeDays !== undefined ? (
-                    <Cell k="Lead time" v={`${item.sourcing.leadTimeDays} days`} />
+                  <Muted>
+                    {item.quantity} {item.unit ?? ''}
+                  </Muted>
+                  <Badge tone={tones.purchaser[item.purchasedBy]} />
+                  {item.clientPrice !== undefined ? (
+                    <Text style={styles.price}>{money(item.clientPrice)}</Text>
+                  ) : viewerRole === 'homeowner' ? (
+                    <Muted>Included in your contract</Muted>
                   ) : null}
                 </Row>
-              </View>
-            ) : null}
 
-            {item.team ? (
-              <View style={styles.team}>
-                <Text style={styles.teamLabel}>
-                  ◈ Your business only — not shown to the homeowner
-                </Text>
-                <Row wrap style={{ gap: space.lg }}>
-                  {item.team.supplierCost !== undefined ? (
-                    <Cell
-                      k="Cost / margin"
-                      v={
-                        item.clientPrice !== undefined
-                          ? `${money(item.team.supplierCost)} / ${money(item.clientPrice - item.team.supplierCost)}`
-                          : money(item.team.supplierCost)
-                      }
-                    />
-                  ) : null}
-                  {viewerRole === 'contractor' ? (
-                    <Cell
-                      k="Homeowner sees price"
-                      v={
-                        item.clientPrice === undefined
-                          ? 'no price set'
-                          : priceVisibleToHomeowner(project, item)
-                            ? 'yes'
-                            : 'no'
-                      }
-                    />
-                  ) : null}
-                  {viewerRole === 'contractor' ? (
-                    <Cell
-                      k="Homeowner sees supplier & SKU"
-                      v={
-                        !item.sourcing
-                          ? 'nothing entered'
-                          : sourcingVisibleToHomeowner(item)
-                            ? 'yes'
-                            : 'no'
-                      }
-                    />
-                  ) : null}
-                </Row>
-                {item.team.note ? <Text style={styles.note}>{item.team.note}</Text> : null}
-              </View>
-            ) : null}
-          </Card>
-        );
-      })}
+                {item.sourcing ? (
+                  <View style={styles.sourcing}>
+                    <Text style={styles.sourcingLabel}>{sourcingLabel(item, viewerRole)}</Text>
+                    <Row wrap style={{ gap: space.lg }}>
+                      {item.sourcing.supplier ? (
+                        <Cell k="Supplier" v={item.sourcing.supplier} />
+                      ) : null}
+                      {item.sourcing.sku ? <Cell k="SKU" v={item.sourcing.sku} mono /> : null}
+                      {item.sourcing.orderNumber ? (
+                        <Cell k="Order #" v={item.sourcing.orderNumber} mono />
+                      ) : null}
+                      {item.sourcing.leadTimeDays !== undefined ? (
+                        <Cell k="Lead time" v={`${item.sourcing.leadTimeDays} days`} />
+                      ) : null}
+                    </Row>
+                  </View>
+                ) : null}
+
+                {item.team ? (
+                  <View style={styles.team}>
+                    <Text style={styles.teamLabel}>
+                      ◈ Your business only — not shown to the homeowner
+                    </Text>
+                    <Row wrap style={{ gap: space.lg }}>
+                      {item.team.supplierCost !== undefined ? (
+                        <Cell
+                          k="Cost / margin"
+                          v={
+                            item.clientPrice !== undefined
+                              ? `${money(item.team.supplierCost)} / ${money(item.clientPrice - item.team.supplierCost)}`
+                              : money(item.team.supplierCost)
+                          }
+                        />
+                      ) : null}
+                      {viewerRole === 'contractor' ? (
+                        <Cell
+                          k="Homeowner sees price"
+                          v={
+                            item.clientPrice === undefined
+                              ? 'no price set'
+                              : priceVisibleToHomeowner(project, item)
+                                ? 'yes'
+                                : 'no'
+                          }
+                        />
+                      ) : null}
+                      {viewerRole === 'contractor' ? (
+                        <Cell
+                          k="Homeowner sees supplier & SKU"
+                          v={
+                            !item.sourcing
+                              ? 'nothing entered'
+                              : sourcingVisibleToHomeowner(item)
+                                ? 'yes'
+                                : 'no'
+                          }
+                        />
+                      ) : null}
+                    </Row>
+                    {item.team.note ? <Text style={styles.note}>{item.team.note}</Text> : null}
+                  </View>
+                ) : null}
+              </Card>
+            );
+          })}
+        </React.Fragment>
+      ))}
       <Row style={{ justifyContent: 'flex-end', gap: space.md }} wrap>
         <Muted>
           {viewerRole === 'homeowner' ? 'Your total for the priced selections' : 'Client total'}
@@ -219,7 +258,8 @@ function ArrivalLine({
     text = (
       <>
         Delivered {shortDate(arrival.at)} — {arrival.received - arrival.damaged} of{' '}
-        {arrival.expected} usable{arrival.damaged ? `, ${arrival.damaged} damaged` : ''} ·{' '}
+        {arrival.expected} usable
+        {arrival.damaged ? `, ${arrival.damaged} damaged` : ''} ·{' '}
         <RefLink to={{ kind: 'event', id: arrival.eventId }}>delivery</RefLink>
       </>
     );
@@ -289,4 +329,5 @@ const makeStyles = (p: Palette) =>
     cellV: { ...type.small, color: p.ink },
     note: { ...type.small, color: p.ink2, fontStyle: 'italic' },
     total: { ...type.h2, color: p.ink, fontVariant: ['tabular-nums'] },
+    roomName: { ...type.label, color: p.ink, fontSize: 15 },
   });
