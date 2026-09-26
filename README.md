@@ -25,9 +25,9 @@ DATABASE_URL=postgres://... npm run test:sql   # scratch Postgres only; proves t
 
 **Try it without installing anything:** every push to `main` builds the web version and puts it
 on GitHub Pages (`.github/workflows/pages.yml`) at `https://<owner>.github.io/Itera-Connect/`. It is
-the same sample project described below — open it on a phone or laptop, switch between Mike, Dana
-and Sam, click around. Nothing typed there is saved: it runs on in-memory sample data until a
-Supabase project is configured, and a page reload starts over.
+the real app, signed in against the Supabase project set in the repository variables (see Field
+test below). Without those variables it is the sample project described below, where nothing typed
+is saved and a page reload starts over.
 
 With no Supabase settings, the app shows a fictional project and a switch to view it as the
 contractor (Mike) or either homeowner (Dana, Sam). That mode is for development and demos; it
