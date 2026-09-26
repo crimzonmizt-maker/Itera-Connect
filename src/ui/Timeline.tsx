@@ -7,6 +7,7 @@ import { audienceLabel, isTeamOnly } from '../model/visibility';
 import { Badge, Button, Card, Field, Muted, RefLink, RefRow, Row } from './primitives';
 import { kindGlyph, space, type, type Palette } from './theme';
 import { useStyles, useTheme } from './ThemeContext';
+import { AttachmentList, PhotoView } from './Files';
 
 type Props = {
   events: ProjectEvent[];
@@ -235,6 +236,8 @@ function EventCard({
         <Headline e={e} items={items} approvals={approvals} />
       </Text>
       {e.kind !== 'note' && e.body ? <Text style={styles.body}>{e.body}</Text> : null}
+      {e.kind === 'photo' ? <PhotoView path={e.uri} caption={e.caption} /> : null}
+      {e.attachments?.length ? <AttachmentList files={e.attachments} /> : null}
       {e.refs && e.refs.length > 0 ? <RefRow refs={e.refs} /> : null}
 
       {canDecide && e.kind === 'approval_requested' && onDecide !== undefined && !changing ? (

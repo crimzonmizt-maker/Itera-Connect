@@ -4,6 +4,7 @@
 import { addDays, newId, newInviteCode } from '../model/format';
 import { guessRoomType } from '../model/rooms';
 import type {
+  Attachment,
   Id,
   Invitation,
   Item,
@@ -17,7 +18,7 @@ import type {
   Decision,
 } from '../model/types';
 import { homeownerIds, modeDefaults, redactItems, visibleEvents } from '../model/visibility';
-import type { ItemInput, NewProject, ProjectRepository, RoomInput } from './repository';
+import type { ItemInput, NewProject, PickedFile, ProjectRepository, RoomInput } from './repository';
 import {
   CONTRACTOR,
   HOMEOWNER,
@@ -341,6 +342,42 @@ export class LocalRepository implements ProjectRepository {
     else this.rooms.push(room);
     this.notify();
     return structuredClone(room);
+  }
+
+  async setProjectDates(projectId: Id, start: string | null, target: string | null) {
+    const v = await this.viewer();
+    if (v.role !== 'contractor') throw new Error('Only the contractor can change dates.');
+    const project = this.projects.find((p) => p.id === projectId);
+    if (!project) throw new Error('That project was not found.');
+    if (start) project.startDate = start;
+    if (target) project.targetDate = target;
+    this.notify();
+  }
+
+  async acceptInvitation(code: string, _displayName: string): Promise<Id> {
+    const v = await this.viewer();
+    const invitation = this.invitations.find(
+      (i) => i.code === code.trim().toUpperCase() && !i.acceptedAt,
+    );
+    if (!invitation) throw new Error('IC_INVITE_INVALID');
+    invitation.acceptedAt = this.clock();
+    if (!this.members.some((m) => m.projectId === invitation.projectId && m.userId === v.userId))
+      this.members.push({
+        projectId: invitation.projectId,
+        userId: v.userId,
+        role: 'homeowner',
+        displayName: v.displayName,
+      });
+    this.notify();
+    return invitation.projectId;
+  }
+
+  /** The sample keeps nothing: the picked file's own address stands in for the stored copy. */
+  async uploadFile(_projectId: Id, file: PickedFile): Promise<Attachment> {
+    return { path: file.uri, name: file.name, mimeType: file.mimeType, size: file.size };
+  }
+  async fileUrl(path: string) {
+    return path;
   }
 
   subscribe(_projectId: Id, onChange: () => void) {

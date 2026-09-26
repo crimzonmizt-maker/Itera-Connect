@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { daysBetween, shortDate, validInviteCode } from '../model/format';
+import { friendlyError } from '../model/errors';
+import { dateInput, daysBetween, parseWhen, shortDate, validInviteCode } from '../model/format';
+import { shareInvitation } from '../ui/share';
 import type { EngagementMode, Invitation, Project, ProjectMember, Viewer } from '../model/types';
 import { Badge, Button, Card, Field, Muted, Row } from '../ui/primitives';
 import { radius, space, type, type Palette } from '../ui/theme';
@@ -26,6 +28,7 @@ export function ProjectHeader({
   viewer,
   now,
   onInvite,
+  onSetDates,
 }: {
   project: Project;
   members: ProjectMember[];
@@ -33,10 +36,13 @@ export function ProjectHeader({
   now: string;
   /** Contractor only. */
   onInvite?: (email: string) => Promise<Invitation>;
+  /** Contractor only. Null leaves a date as it is. */
+  onSetDates?: (start: string | null, target: string | null) => Promise<void>;
 }) {
   const { tones } = useTheme();
   const styles = useStyles(makeStyles);
   const [open, setOpen] = useState(false);
+  const [editingDates, setEditingDates] = useState(false);
   const contractor = members.find((m) => m.role === 'contractor');
   const homeowners = members.filter((m) => m.role === 'homeowner');
   const isContractor = viewer.role === 'contractor';
@@ -67,7 +73,26 @@ export function ProjectHeader({
         {project.targetDate
           ? ` · ${isContractor ? 'target finish' : 'aiming to finish around'} ${shortDate(project.targetDate)}`
           : ''}
+        {isContractor && onSetDates && !editingDates ? (
+          <>
+            {' · '}
+            <Text style={styles.link} onPress={() => setEditingDates(true)}>
+              {project.startDate || project.targetDate ? 'change dates' : 'set dates'}
+            </Text>
+          </>
+        ) : null}
       </Muted>
+      {editingDates && onSetDates ? (
+        <DatesForm
+          project={project}
+          now={now}
+          onSave={async (start, target) => {
+            await onSetDates(start, target);
+            setEditingDates(false);
+          }}
+          onCancel={() => setEditingDates(false)}
+        />
+      ) : null}
       {isContractor ? (
         <Muted>
           {modeLabel[project.mode]} · client prices {project.showPrices ? 'shown' : 'hidden'} on
@@ -114,6 +139,54 @@ export function ProjectHeader({
   );
 }
 
+/** Start and target finish. Both optional; a blank box leaves that date as it is. */
+function DatesForm({
+  project,
+  now,
+  onSave,
+  onCancel,
+}: {
+  project: Project;
+  now: string;
+  onSave: (start: string | null, target: string | null) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [start, setStart] = useState(dateInput(project.startDate));
+  const [target, setTarget] = useState(dateInput(project.targetDate));
+  const [busy, setBusy] = useState(false);
+  const startDate = parseWhen(start, now);
+  const targetDate = parseWhen(target, now);
+  const unreadable = (start.trim() && !startDate) || (target.trim() && !targetDate);
+  return (
+    <Card style={{ gap: space.sm }}>
+      <Field label="Start (e.g. 10/6 or 2026-10-06)" value={start} onChangeText={setStart} />
+      <Field label="Target finish" value={target} onChangeText={setTarget} />
+      <Muted>
+        {unreadable
+          ? 'Could not read one of those dates — try 10/6.'
+          : `${startDate ? `Starts ${shortDate(startDate)}` : 'No start date'} · ${
+              targetDate ? `finishes ${shortDate(targetDate)}` : 'no target finish'
+            }. The homeowner sees both.`}
+      </Muted>
+      <Row>
+        <Button
+          title="Save dates"
+          disabled={busy || !!unreadable}
+          onPress={async () => {
+            setBusy(true);
+            try {
+              await onSave(startDate ?? null, targetDate ?? null);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        />
+        <Button title="Cancel" kind="quiet" onPress={onCancel} />
+      </Row>
+    </Card>
+  );
+}
+
 /** "Add user to project": creates the invitation code the homeowner redeems at sign-in. */
 function InvitePanel({ onInvite }: { onInvite: (email: string) => Promise<Invitation> }) {
   const styles = useStyles(makeStyles);
@@ -121,6 +194,7 @@ function InvitePanel({ onInvite }: { onInvite: (email: string) => Promise<Invita
   const [email, setEmail] = useState('');
   const [invitation, setInvitation] = useState<Invitation>();
   const [error, setError] = useState<string>();
+  const [shared, setShared] = useState<string>();
   const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   if (!adding && !invitation)
     return (
@@ -159,9 +233,7 @@ function InvitePanel({ onInvite }: { onInvite: (email: string) => Promise<Invita
                 setInvitation(inv);
                 setError(undefined);
               })
-              .catch((e: unknown) =>
-                setError(e instanceof Error ? e.message : 'Could not create the invitation.'),
-              )
+              .catch((e: unknown) => setError(friendlyError(e, 'Could not create the invitation.')))
           }
         />
         <Button
@@ -185,11 +257,26 @@ function InvitePanel({ onInvite }: { onInvite: (email: string) => Promise<Invita
             {invitation.code.slice(0, 4)} {invitation.code.slice(4)}
           </Text>
           <Muted>
-            Valid until {shortDate(invitation.expiresAt)}.{' '}
+            Valid until {shortDate(invitation.expiresAt)}, once.{' '}
             {validInviteCode(invitation.code)
               ? 'No zeros or letter O, so it survives being read aloud.'
               : ''}
           </Muted>
+          <Row wrap>
+            <Button
+              title="Send invitation…"
+              glyph="↗"
+              kind="secondary"
+              onPress={() =>
+                void shareInvitation(invitation).then((how) =>
+                  setShared(
+                    how === 'copied' ? 'Copied — paste it into a text or e-mail.' : undefined,
+                  ),
+                )
+              }
+            />
+          </Row>
+          {shared ? <Muted>{shared}</Muted> : null}
         </View>
       ) : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -203,6 +290,7 @@ const makeStyles = (p: Palette) =>
     label: { ...type.label, color: p.ink3 },
     sharedRow: { paddingVertical: 6, minHeight: 36, justifyContent: 'center' },
     sharedText: { ...type.small, fontWeight: '600', color: p.accent },
+    link: { color: p.accent, fontWeight: '600', textDecorationLine: 'underline' },
     code: {
       backgroundColor: p.accentSoft,
       borderRadius: radius.md,

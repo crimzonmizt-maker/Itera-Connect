@@ -385,7 +385,7 @@ export function ItemForm({
           </View>
           <View style={{ flexGrow: 1, minWidth: 120 }}>
             <Field
-              label="SKU / part #"
+              label="Model / SKU / part #"
               value={sku}
               onChangeText={setSku}
               placeholder="CB-48-WO"

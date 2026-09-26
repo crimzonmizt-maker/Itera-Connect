@@ -52,3 +52,41 @@ export function plural(unit: string, count: number): string {
   if (/(s|x|ch|sh)$/.test(unit)) return `${unit}es`;
   return `${unit}s`;
 }
+
+/**
+ * A date as a person types it: "2026-10-03", "10/3/2026", "10/3" (this year, or next year if that
+ * day has passed) or a number of days from now ("7"). Returns noon on that day, so a time zone
+ * shift cannot move it to the day before; undefined when blank or unreadable.
+ */
+export function parseWhen(text: string, now: IsoDate): IsoDate | undefined {
+  const t = text.trim();
+  if (t === '') return undefined;
+  if (/^\d{1,3}$/.test(t)) return addDays(now, Number(t));
+  const at = (y: number, m: number, d: number) => {
+    const date = new Date(y, m - 1, d, 12);
+    return date.getFullYear() === y && date.getMonth() === m - 1 && date.getDate() === d
+      ? date.toISOString()
+      : undefined;
+  };
+  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(t);
+  if (m) return at(Number(m[1]), Number(m[2]), Number(m[3]));
+  m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(t);
+  if (m) return at(Number(m[3]), Number(m[1]), Number(m[2]));
+  m = /^(\d{1,2})\/(\d{1,2})$/.exec(t);
+  if (m) {
+    const today = new Date(now);
+    const thisYear = at(today.getFullYear(), Number(m[1]), Number(m[2]));
+    if (!thisYear) return undefined;
+    return daysBetween(now, thisYear) < -1
+      ? at(today.getFullYear() + 1, Number(m[1]), Number(m[2]))
+      : thisYear;
+  }
+  return undefined;
+}
+
+/** For a date box: an ISO date back to "2026-10-03" in local time. */
+export const dateInput = (iso: IsoDate | undefined) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};

@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { partitionSuggestions } from '../concierge/dismissals';
 import { allSuggestions } from '../concierge/rules';
-import type { ItemInput, ProjectRepository, RoomInput } from '../data/repository';
+import type { ItemInput, PickedFile, ProjectRepository, RoomInput } from '../data/repository';
+import { friendlyError } from '../model/errors';
 import { approvals, openApprovals, projectProgress } from '../model/progress';
+import { roleOn } from '../model/types';
 import type {
+  Attachment,
   Id,
   Item,
   NewEvent,
@@ -40,7 +43,8 @@ export function useProject(
         repo.listRooms(projectId),
         repo.listMembers(projectId),
       ]);
-      setViewer(v);
+      // The same person can run one project and be invited to another: the role is per project.
+      setViewer({ ...v, role: roleOn(v, p) });
       setProject(p);
       setEvents(e);
       setItems(i);
@@ -48,7 +52,7 @@ export function useProject(
       setMembers(m);
       setError(undefined);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load the project.');
+      setError(friendlyError(err, 'Could not load the project. Check your connection.'));
     } finally {
       setLoading(false);
     }
@@ -80,7 +84,7 @@ export function useProject(
       await fn();
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'That did not go through.');
+      setError(friendlyError(err));
     }
   };
 
@@ -113,6 +117,14 @@ export function useProject(
       const saved = await repo.upsertRoom(projectId, room);
       await refresh();
       return saved;
+    },
+    setDates: (start: string | null, target: string | null) =>
+      act(() => repo.setProjectDates(projectId, start, target)),
+    /** Uploads one at a time, in order. Throws on the first failure so the form can say which. */
+    upload: async (files: PickedFile[]): Promise<Attachment[]> => {
+      const done: Attachment[] = [];
+      for (const f of files) done.push(await repo.uploadFile(projectId, f));
+      return done;
     },
     clearError: () => setError(undefined),
   };

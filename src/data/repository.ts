@@ -1,4 +1,5 @@
 import type {
+  Attachment,
   EngagementMode,
   Id,
   Invitation,
@@ -27,6 +28,18 @@ export type NewProject = {
  * word, so it is confirmed; leave it out and the repository guesses from the name (unconfirmed).
  */
 export type RoomInput = { id?: Id; name: string; type?: RoomType };
+
+/**
+ * A file the person picked, before it is uploaded. `file` is set on the web (the browser's own
+ * File); on a phone the bytes are read from `uri`.
+ */
+export type PickedFile = {
+  name: string;
+  mimeType: string;
+  size?: number;
+  uri: string;
+  file?: Blob;
+};
 
 /** An item as the contractor edits it. No id = create; with id = update that item. */
 export type ItemInput = Omit<Item, 'id' | 'projectId'> & { id?: Id };
@@ -67,6 +80,14 @@ export interface ProjectRepository {
   upsertItem(projectId: Id, item: ItemInput): Promise<Item>;
   /** Contractor only. Creating a room with a type-less name guesses the type and marks it unconfirmed. */
   upsertRoom(projectId: Id, room: RoomInput): Promise<Room>;
+  /** Contractor only. Null leaves a date as it is. */
+  setProjectDates(projectId: Id, start: string | null, target: string | null): Promise<void>;
+  /** Redeem an invitation code as the signed-in person. Returns the project it opens. */
+  acceptInvitation(code: string, displayName: string): Promise<Id>;
+  /** Store a file under the project. It is readable once an entry that points at it is posted. */
+  uploadFile(projectId: Id, file: PickedFile): Promise<Attachment>;
+  /** A short-lived address to show or download a stored file. */
+  fileUrl(path: string): Promise<string>;
   /** Called when data changes from this device or another. Returns an unsubscribe. */
   subscribe(projectId: Id, onChange: () => void): () => void;
 }

@@ -166,10 +166,19 @@ type EventBase = {
    * the job a digest line mentions. Every reference in the app is a link, never plain text.
    */
   refs?: Ref[];
+  /** Files that travel with the entry. Same audience as the entry. */
+  attachments?: Attachment[];
   replies: Reply[];
 };
 
 export type Ref = { kind: 'item' | 'event'; id: Id; label: string };
+
+/**
+ * A file on the record: a photo, a PDF spec sheet, a drawing. `path` is where the backend keeps
+ * it (Supabase: "<project id>/<random>/<name>" in the private ic-files bucket). Who may open it
+ * follows the entry it is attached to — the database checks that, not the screen.
+ */
+export type Attachment = { path: string; name: string; mimeType: string; size?: number };
 
 /**
  * The spine of a project. Everything that happens is one of these, appended in order.
@@ -241,9 +250,26 @@ export type NewEvent = DistributiveOmit<
   'id' | 'at' | 'authorId' | 'authorName' | 'authorRole' | 'replies'
 >;
 
+export type Plan = 'free' | 'pro';
+
+/** The account's plan and what it allows. projectLimit null = no limit. */
+export type Account = { plan: Plan; projectLimit: number | null };
+
 export type Viewer = {
   userId: Id;
   displayName: string;
+  /**
+   * The role this person has by default: contractor if they run a business. On a given project
+   * the role can differ (a contractor invited to someone else's job is a homeowner there);
+   * `roleOn` decides that.
+   */
   role: Role;
   businessId?: Id; // set for contractors
+  account?: Account;
 };
+
+/** The role a viewer has on one project: team if the project belongs to their business. */
+export function roleOn(viewer: Viewer, project: Pick<Project, 'businessId'> | undefined): Role {
+  if (!project || viewer.businessId === undefined) return viewer.role;
+  return project.businessId === viewer.businessId ? 'contractor' : 'homeowner';
+}

@@ -1,8 +1,10 @@
 name: Publish demo (GitHub Pages)
 # Builds the web export on every push to main and publishes it at
-# https://<owner>.github.io/<repo>/ — the sample project, no account needed, so a tester can
-# open it on a phone or laptop with nothing to install. Nothing typed there is saved: the demo
-# runs on in-memory sample data until a Supabase project is configured.
+# https://<owner>.github.io/<repo>/ so a tester can open it on a phone or laptop with nothing to
+# install. With the repository variables EXPO_PUBLIC_SUPABASE_URL and
+# EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY set (Settings → Secrets and variables → Actions →
+# Variables) it is the real app with sign-in; without them, the sample project where nothing is
+# saved. The publishable key is meant to be public: row-level security guards the data.
 on:
   push: { branches: [main] }
   workflow_dispatch:
@@ -23,6 +25,8 @@ jobs:
         env:
           # Project sites live under /<repo-name>/; asset paths must match.
           EXPO_BASE_URL: /${{ github.event.repository.name }}
+          EXPO_PUBLIC_SUPABASE_URL: ${{ vars.EXPO_PUBLIC_SUPABASE_URL }}
+          EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ vars.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
       # Pages runs Jekyll by default, which drops folders starting with "_" — such as _expo.
       - run: touch dist/.nojekyll
       - uses: actions/upload-pages-artifact@v3

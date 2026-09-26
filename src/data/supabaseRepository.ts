@@ -1,9 +1,11 @@
 // Repository over the schema in supabase/migrations/20260920_foundation.sql.
 // Reads go through tables and the ic_items_v view (RLS and the view filter by role and
 // audience); writes go through the ic_* functions.
-import { newInviteCode } from '../model/format';
+import { newId, newInviteCode } from '../model/format';
 import { guessRoomType } from '../model/rooms';
 import type {
+  Account,
+  Attachment,
   Id,
   Invitation,
   Item,
@@ -17,10 +19,16 @@ import type {
   Viewer,
   Decision,
 } from '../model/types';
-import type { ItemInput, NewProject, ProjectRepository, RoomInput } from './repository';
+import type { ItemInput, NewProject, PickedFile, ProjectRepository, RoomInput } from './repository';
 import { supabase } from './supabaseClient';
 
 type Row = Record<string, unknown>;
+
+/** "2026-10-03T16:00:00.000Z" → "2026-10-03" in the person's own time zone (a date column). */
+function dateOnly(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 const str = (v: unknown) => (typeof v === 'string' ? v : undefined);
 const num = (v: unknown) =>
   typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : undefined;
@@ -113,6 +121,20 @@ function splitEvent(event: NewEvent) {
   return { kind, audience, body: body ?? null, data };
 }
 
+const BUCKET = 'ic-files';
+
+/** Keep a file's own name readable in its path, minus anything a URL or folder would trip on. */
+const safeName = (name: string) =>
+  name
+    .replace(/[^\w.\- ]+/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(-80) || 'file';
+
+/**
+ * One instance per signed-in person: App builds a new one whenever the signed-in user changes,
+ * so nothing cached here (who you are, your business) can leak into the next person's session.
+ */
 export class SupabaseRepository implements ProjectRepository {
   private viewerCache?: Viewer;
 
@@ -122,19 +144,18 @@ export class SupabaseRepository implements ProjectRepository {
     const { data: auth } = await db.auth.getUser();
     const user = auth.user;
     if (!user) throw new Error('Not signed in.');
-    const { data: biz } = await db
-      .from('ic_business_members')
-      .select('business_id')
-      .eq('user_id', user.id)
-      .limit(1);
-    const businessId = biz?.[0]?.business_id as string | undefined;
-    const { data: member } = await db
-      .from('ic_project_members')
-      .select('display_name')
-      .eq('user_id', user.id)
-      .limit(1);
+    const [biz, member, account] = await Promise.all([
+      db.from('ic_business_members').select('business_id').eq('user_id', user.id).limit(1),
+      db.from('ic_project_members').select('display_name').eq('user_id', user.id).limit(1),
+      db.rpc('ic_my_account'),
+    ]);
+    // A failed read must not quietly turn a contractor into a homeowner: stop and say so.
+    if (biz.error) throw biz.error;
+    if (member.error) throw member.error;
+    if (account.error) throw account.error;
+    const businessId = biz.data?.[0]?.business_id as string | undefined;
     const displayName =
-      (member?.[0]?.display_name as string | undefined) ??
+      (member.data?.[0]?.display_name as string | undefined) ??
       (user.user_metadata?.display_name as string | undefined) ??
       user.email ??
       'You';
@@ -143,6 +164,7 @@ export class SupabaseRepository implements ProjectRepository {
       displayName,
       role: businessId ? 'contractor' : 'homeowner',
       businessId,
+      account: account.data as Account,
     };
     return this.viewerCache;
   }
@@ -205,9 +227,10 @@ export class SupabaseRepository implements ProjectRepository {
       .order('at');
     if (error) throw error;
     const ids = (events ?? []).map((e) => e.id as string);
-    const { data: replies } = ids.length
+    const { data: replies, error: replyError } = ids.length
       ? await db.from('ic_replies').select('*').in('event_id', ids).order('at')
-      : { data: [] };
+      : { data: [], error: null };
+    if (replyError) throw replyError;
     const byEvent = new Map<string, Reply[]>();
     for (const r of replies ?? []) {
       const list = byEvent.get(r.event_id as string) ?? [];
@@ -227,11 +250,12 @@ export class SupabaseRepository implements ProjectRepository {
       p_data: data,
     });
     if (error) throw error;
-    const { data: row } = await supabase()
+    const { data: row, error: readError } = await supabase()
       .from('ic_events')
       .select('*')
       .eq('id', id as string)
       .single();
+    if (readError) throw readError;
     return toEvent(row as Row, []);
   }
   async reply(projectId: Id, eventId: Id, body: string): Promise<ProjectEvent> {
@@ -261,11 +285,12 @@ export class SupabaseRepository implements ProjectRepository {
       p_code: code,
     });
     if (error) throw error;
-    const { data: row } = await supabase()
+    const { data: row, error: readError } = await supabase()
       .from('ic_invitations')
       .select('*')
       .eq('id', id as string)
       .single();
+    if (readError) throw readError;
     const r = row as Row;
     return {
       id: r.id as string,
@@ -300,11 +325,7 @@ export class SupabaseRepository implements ProjectRepository {
     if (error) throw error;
     if (input.targetDate) {
       // Target date is optional and not part of the create function; set it in one follow-up.
-      await db.rpc('ic_set_project_dates', {
-        p_project: id,
-        p_start: null,
-        p_target: input.targetDate.slice(0, 10),
-      });
+      await this.setProjectDates(id as string, null, input.targetDate);
     }
     const project = await this.getProject(id as string);
     if (!project) throw new Error('The project was created but could not be read back.');
@@ -341,6 +362,40 @@ export class SupabaseRepository implements ProjectRepository {
       .single();
     if (readError) throw readError;
     return toRoom(row as Row);
+  }
+
+  async setProjectDates(projectId: Id, start: string | null, target: string | null) {
+    const { error } = await supabase().rpc('ic_set_project_dates', {
+      p_project: projectId,
+      p_start: start ? dateOnly(start) : null,
+      p_target: target ? dateOnly(target) : null,
+    });
+    if (error) throw error;
+  }
+
+  async acceptInvitation(code: string, displayName: string): Promise<Id> {
+    const id = await SupabaseRepository.acceptInvitation(code, displayName);
+    this.viewerCache = undefined; // the display name may have been set by the invitation
+    return id;
+  }
+
+  async uploadFile(projectId: Id, file: PickedFile): Promise<Attachment> {
+    // "<project>/<random>/<name>": the database reads the project from the first folder.
+    const path = `${projectId}/${newId('f')}/${safeName(file.name)}`;
+    const body = file.file ?? (await (await fetch(file.uri)).arrayBuffer());
+    const { error } = await supabase()
+      .storage.from(BUCKET)
+      .upload(path, body, { contentType: file.mimeType, upsert: false });
+    if (error) throw error;
+    return { path, name: file.name, mimeType: file.mimeType, size: file.size };
+  }
+
+  async fileUrl(path: string) {
+    const { data, error } = await supabase()
+      .storage.from(BUCKET)
+      .createSignedUrl(path, 60 * 60);
+    if (error) throw error;
+    return data.signedUrl;
   }
 
   subscribe(projectId: Id, onChange: () => void) {

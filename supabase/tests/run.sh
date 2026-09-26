@@ -11,4 +11,5 @@ for m in supabase/migrations/*.sql; do
 done
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f supabase/tests/foundation.sql | grep -q 'ALL FOUNDATION CHECKS PASSED'
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f supabase/tests/rooms.sql | grep -q 'ALL ROOM CHECKS PASSED'
-echo "sql: all foundation and room checks passed"
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f supabase/tests/field_test.sql | grep -q 'ALL FIELD TEST CHECKS PASSED'
+echo "sql: all foundation, room and field-test checks passed"

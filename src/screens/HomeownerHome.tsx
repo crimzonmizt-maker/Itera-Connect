@@ -1,6 +1,10 @@
 import React, { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import type { PickedFile } from '../data/repository';
+import { friendlyError } from '../model/errors';
 import { money, shortDate } from '../model/format';
+import type { Attachment, NewEvent } from '../model/types';
+import { checkFile, isImage, PendingFiles, pickFiles } from '../ui/Files';
 import { useFocusRouter } from '../ui/FocusContext';
 import { ItemsTable } from '../ui/ItemsTable';
 import {
@@ -47,6 +51,8 @@ export function HomeownerHome({ state }: { state: ProjectState }) {
     approvals,
     reply,
     decide,
+    post,
+    upload,
     now,
   } = state;
   const [changing, setChanging] = useState<string>(); // approvalId with the note box open
@@ -214,6 +220,11 @@ export function HomeownerHome({ state }: { state: ProjectState }) {
           </>
         ) : null}
 
+        <SectionTitle hint="Your contractor and everyone else on the project will see it">
+          Send a photo or file
+        </SectionTitle>
+        <SendFile projectId={project.id} onUpload={upload} onPost={post} />
+
         <SectionTitle hint="Newest first. Ask about anything here — your question stays with it.">
           What has happened
         </SectionTitle>
@@ -231,9 +242,88 @@ export function HomeownerHome({ state }: { state: ProjectState }) {
   );
 }
 
+/**
+ * A homeowner can put a photo or a PDF on the record — the leak under the sink, the receipt for
+ * the tile they bought. It always has a caption, so it is about something; questions about an
+ * existing entry still go in that entry's replies. The database addresses it to the team and
+ * every homeowner on the project; the homeowner cannot narrow that.
+ */
+function SendFile({
+  projectId,
+  onUpload,
+  onPost,
+}: {
+  projectId: string;
+  onUpload: (files: PickedFile[]) => Promise<Attachment[]>;
+  onPost: (e: NewEvent) => Promise<void>;
+}) {
+  const styles = useStyles(makeStyles);
+  const [files, setFiles] = useState<PickedFile[]>([]);
+  const [caption, setCaption] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string>();
+  const choose = async () => {
+    const picked = await pickFiles('any');
+    const refused = picked.map(checkFile).filter(Boolean);
+    setProblem(refused.length ? refused.join(' ') : undefined);
+    setFiles((f) => [...f, ...picked.filter((x) => !checkFile(x))]);
+  };
+  const send = async () => {
+    setBusy(true);
+    setProblem(undefined);
+    try {
+      const stored = await onUpload(files);
+      const photo = stored.length === 1 && isImage(stored[0]!.mimeType) ? stored[0] : undefined;
+      // One photo reads best as a photo entry; anything else is a note carrying its files.
+      await onPost(
+        photo
+          ? { projectId, kind: 'photo', uri: photo.path, caption: caption.trim(), audience: [] }
+          : { projectId, kind: 'note', body: caption.trim(), attachments: stored, audience: [] },
+      );
+      setFiles([]);
+      setCaption('');
+    } catch (e) {
+      setProblem(friendlyError(e, 'That did not upload. Try again.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Card style={{ gap: space.sm }}>
+      <Row wrap>
+        <Button
+          title="Choose photo or PDF"
+          glyph="⎘"
+          kind="secondary"
+          disabled={busy}
+          onPress={() => void choose()}
+        />
+      </Row>
+      <PendingFiles files={files} onRemove={(i) => setFiles((f) => f.filter((_, j) => j !== i))} />
+      <Field
+        label="What is it?"
+        value={caption}
+        onChangeText={setCaption}
+        multiline
+        placeholder="e.g. Water under the vanity this morning / Receipt for the floor tile"
+      />
+      {problem ? <Text style={styles.problem}>{problem}</Text> : null}
+      <Row style={{ justifyContent: 'flex-end' }}>
+        <Button
+          title={busy ? 'Sending…' : 'Send'}
+          glyph="↑"
+          disabled={busy || files.length === 0 || !caption.trim()}
+          onPress={() => void send()}
+        />
+      </Row>
+    </Card>
+  );
+}
+
 const makeStyles = (p: Palette) =>
   StyleSheet.create({
     approvalTitle: { ...type.body, fontWeight: '600', color: p.ink },
     note: { ...type.small, color: p.ink2, fontStyle: 'italic' },
     buyName: { ...type.body, color: p.ink, flexShrink: 1 },
+    problem: { ...type.small, color: p.amber, fontWeight: '600' },
   });

@@ -1,10 +1,13 @@
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { addDays, money, newId, shortDate } from '../model/format';
+import type { PickedFile } from '../data/repository';
+import { friendlyError } from '../model/errors';
+import { addDays, money, newId, parseWhen, shortDate } from '../model/format';
 import { isOpen } from '../model/progress';
-import type { EventKind, Id, Item, NewEvent, ProjectMember } from '../model/types';
+import type { Attachment, EventKind, Id, Item, NewEvent, ProjectMember } from '../model/types';
 import { audienceLabel, defaultAudience, homeownerIds } from '../model/visibility';
 import { ConciergePanel } from '../ui/ConciergePanel';
+import { checkFile, isImage, PendingFiles, pickFiles } from '../ui/Files';
 import { ItemsTable } from '../ui/ItemsTable';
 import { useFocus, useFocusRouter } from '../ui/FocusContext';
 import {
@@ -45,6 +48,8 @@ export function ContractorHome({ state }: { state: ProjectState }) {
     invite,
     saveItem,
     saveRoom,
+    setDates,
+    upload,
     now,
   } = state;
   const [tab, setTab] = useState<Tab>('overview');
@@ -76,6 +81,7 @@ export function ContractorHome({ state }: { state: ProjectState }) {
         viewer={viewer}
         now={now}
         onInvite={invite}
+        onSetDates={setDates}
       />
 
       <View style={{ marginTop: space.md }}>
@@ -91,8 +97,8 @@ export function ContractorHome({ state }: { state: ProjectState }) {
 
       {/* Both panes stay mounted (see TabPane), so a tab switch keeps form and pager state. */}
       <TabPane active={tab === 'overview'}>
-        <SectionTitle hint="Start, Update or Done — each goes on the record and the homeowner sees it">
-          Progress
+        <SectionTitle hint="Plan the tasks, then Start, Update or Done — each goes on the record and the homeowner sees it">
+          Tasks &amp; progress
         </SectionTitle>
         <Card>
           <ProgressBar
@@ -105,6 +111,17 @@ export function ContractorHome({ state }: { state: ProjectState }) {
                 status,
                 due: m.due,
                 body,
+                audience: homeownerIds(members),
+              })
+            }
+            now={now}
+            onAdd={(title, due) =>
+              post({
+                projectId: project.id,
+                kind: 'milestone',
+                title,
+                status: 'planned',
+                due,
                 audience: homeownerIds(members),
               })
             }
@@ -139,7 +156,10 @@ export function ContractorHome({ state }: { state: ProjectState }) {
           key={members.map((m) => m.userId).join(',')}
           projectId={project.id}
           members={members}
+          items={items}
+          now={now}
           onPost={post}
+          onUpload={upload}
         />
 
         <SectionTitle hint="Every note, delivery and decision, newest first">Timeline</SectionTitle>
@@ -259,11 +279,17 @@ const kinds: EventKind[] = ['note', 'milestone', 'schedule', 'photo', 'document_
 function Compose({
   projectId,
   members,
+  items,
+  now,
   onPost,
+  onUpload,
 }: {
   projectId: string;
   members: ProjectMember[];
+  items: Item[];
+  now: string;
   onPost: (e: NewEvent) => Promise<void>;
+  onUpload: (files: PickedFile[]) => Promise<Attachment[]>;
 }) {
   const { palette: p, tones } = useTheme();
   const styles = useStyles(makeStyles);
@@ -271,11 +297,22 @@ function Compose({
   const [audience, setAudience] = useState<Id[]>(() => defaultAudience('note', members));
   const [body, setBody] = useState('');
   const [title, setTitle] = useState('');
-  const [days, setDays] = useState('7');
+  const [when, setWhen] = useState('7');
   const [to, setTo] = useState('');
   const [layers, setLayers] = useState('');
   const [busy, setBusy] = useState(false);
+  const [files, setFiles] = useState<PickedFile[]>([]);
+  const [about, setAbout] = useState<Id>(); // the item this entry is about, if any
+  const [problem, setProblem] = useState<string>();
   const homeowners = members.filter((m) => m.role === 'homeowner');
+  const date = parseWhen(when, now);
+
+  const choose = async () => {
+    const picked = await pickFiles(kind === 'photo' ? 'photo' : 'any');
+    const refused = picked.map(checkFile).filter(Boolean);
+    setProblem(refused.length ? refused.join(' ') : undefined);
+    setFiles((f) => [...f, ...picked.filter((x) => !checkFile(x))]);
+  };
 
   const pick = (k: EventKind) => {
     setKind(k);
@@ -286,15 +323,38 @@ function Compose({
     setAudience((a) => (a.includes(id) ? a.filter((x) => x !== id) : [...a, id]));
 
   const valid =
-    kind === 'note' || kind === 'photo'
-      ? body.trim().length > 0
-      : kind === 'document_sent'
-        ? title.trim().length > 0 && to.trim().length > 0
-        : title.trim().length > 0;
+    kind === 'photo'
+      ? files.some((f) => isImage(f.mimeType))
+      : kind === 'note'
+        ? body.trim().length > 0 || files.length > 0
+        : kind === 'document_sent'
+          ? title.trim().length > 0 && to.trim().length > 0
+          : kind === 'schedule'
+            ? title.trim().length > 0 && date !== undefined
+            : title.trim().length > 0;
 
   const submit = async () => {
     setBusy(true);
-    const base = { projectId, audience, body: body.trim() || undefined };
+    setProblem(undefined);
+    let stored: Attachment[];
+    try {
+      // Files go up first; the entry that points at them is what lets the homeowner open them.
+      stored = await onUpload(files);
+    } catch (e) {
+      setProblem(friendlyError(e, 'The file did not upload. Try again.'));
+      setBusy(false);
+      return;
+    }
+    const item = items.find((i) => i.id === about);
+    const photo = kind === 'photo' ? stored.find((a) => isImage(a.mimeType)) : undefined;
+    const attachments = stored.filter((a) => a !== photo);
+    const base = {
+      projectId,
+      audience,
+      body: body.trim() || undefined,
+      ...(attachments.length ? { attachments } : {}),
+      ...(item ? { refs: [{ kind: 'item' as const, id: item.id, label: item.name }] } : {}),
+    };
     let event: NewEvent;
     switch (kind) {
       case 'milestone':
@@ -305,11 +365,11 @@ function Compose({
           ...base,
           kind,
           title: title.trim(),
-          date: addDays(new Date().toISOString(), Number(days) || 0),
+          date: date ?? addDays(now, 7),
         };
         break;
       case 'photo':
-        event = { ...base, kind, uri: 'sample://photo', caption: body.trim() };
+        event = { ...base, kind, uri: photo!.path, caption: body.trim() || undefined };
         break;
       case 'document_sent':
         event = {
@@ -335,7 +395,9 @@ function Compose({
       setTitle('');
       setLayers('');
       setTo('');
-      setDays('7');
+      setWhen('7');
+      setFiles([]);
+      setAbout(undefined);
       setKind('note');
       setAudience(defaultAudience('note', members));
     } finally {
@@ -382,12 +444,17 @@ function Compose({
         />
       ) : null}
       {kind === 'schedule' ? (
-        <Field
-          label="In how many days"
-          value={days}
-          onChangeText={setDays}
-          keyboardType="number-pad"
-        />
+        <>
+          <Field
+            label="When — a date like 10/14, or a number of days from today"
+            value={when}
+            onChangeText={setWhen}
+            placeholder="e.g. 10/14 or 7"
+          />
+          <Muted>
+            {date ? `On ${shortDate(date)}` : 'Could not read that date — try 10/14 or 7.'}
+          </Muted>
+        </>
       ) : null}
       {kind === 'document_sent' ? (
         <>
@@ -416,6 +483,50 @@ function Compose({
           kind === 'note' ? 'What happened, or what you want the homeowner to know' : 'Optional'
         }
       />
+
+      <View style={{ gap: space.xs }}>
+        <Row wrap>
+          <Button
+            title={kind === 'photo' ? 'Choose photos' : 'Attach photo or PDF'}
+            glyph="⎘"
+            kind="secondary"
+            disabled={busy}
+            onPress={() => void choose()}
+          />
+          {kind === 'photo' ? <Muted>On a phone this offers the camera too.</Muted> : null}
+        </Row>
+        <PendingFiles
+          files={files}
+          onRemove={(i) => setFiles((f) => f.filter((_, j) => j !== i))}
+        />
+      </View>
+
+      {items.length > 0 ? (
+        <View style={{ gap: space.xs }}>
+          <Text style={styles.label}>About an item (optional) — links the entry to it</Text>
+          <Row wrap>
+            {items.map((it) => {
+              const on = about === it.id;
+              return (
+                <Pressable
+                  key={it.id}
+                  accessibilityRole="radio"
+                  accessibilityState={{ checked: on }}
+                  aria-checked={on}
+                  onPress={() => setAbout(on ? undefined : it.id)}
+                  style={[styles.chip, on && styles.chipOn]}
+                >
+                  <Text style={[styles.chipText, on && styles.chipTextOn]}>
+                    {it.name}
+                    {it.sourcing?.sku ? ` · ${it.sourcing.sku}` : ''}
+                    {on ? ' ✓' : ''}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </Row>
+        </View>
+      ) : null}
 
       <View style={{ gap: space.xs }}>
         <Text style={styles.label}>Who sees this</Text>
@@ -463,8 +574,14 @@ function Compose({
         <Muted>{audienceLabel(audience, members)}</Muted>
       </View>
 
+      {problem ? <Text style={styles.error}>{problem}</Text> : null}
       <Row style={{ justifyContent: 'flex-end' }}>
-        <Button title="Post" glyph="↑" onPress={submit} disabled={busy || !valid} />
+        <Button
+          title={busy && files.length ? 'Uploading…' : 'Post'}
+          glyph="↑"
+          onPress={submit}
+          disabled={busy || !valid}
+        />
       </Row>
     </Card>
   );

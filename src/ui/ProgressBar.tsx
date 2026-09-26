@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { parseWhen, shortDate } from '../model/format';
 import type { Milestone, Progress } from '../model/progress';
 import { Button, Field, Muted, Row } from './primitives';
 import { radius, space, type, type Palette } from './theme';
@@ -9,12 +10,17 @@ import { useStyles, useTheme } from './ThemeContext';
  * Percent + count + the current milestone. Number and words carry the meaning; the bar is decoration.
  * With `onAdvance` (contractor only) each milestone gets Start / Update / Done — no retyping.
  * Update posts a short note under the milestone without changing its status.
+ * With `onAdd` (contractor only) new tasks can be planned here, with an optional due date.
  */
 export function ProgressBar({
   progress,
   onAdvance,
+  onAdd,
+  now,
 }: {
   progress: Progress;
+  onAdd?: (title: string, due?: string) => Promise<void>;
+  now?: string;
   onAdvance?: (
     milestone: Milestone,
     status: Milestone['status'] | 'update',
@@ -42,7 +48,9 @@ export function ProgressBar({
       <Row style={{ justifyContent: 'space-between' }} wrap>
         <Text style={styles.big}>{progress.percent}%</Text>
         <Muted>
-          {progress.done} of {progress.total} milestones finished
+          {progress.total === 0
+            ? 'No tasks planned yet'
+            : `${progress.done} of ${progress.total} tasks finished`}
         </Muted>
       </Row>
       <View
@@ -69,6 +77,7 @@ export function ProgressBar({
                 <Text style={[styles.step, m.status === 'done' && { color: p.ink3 }]}>
                   {m.title}
                   {m.status === 'started' ? ' — in progress' : ''}
+                  {m.due && m.status !== 'done' ? ` · due ${shortDate(m.due)}` : ''}
                 </Text>
               </Row>
               {onAdvance && m.status !== 'done' ? (
@@ -126,6 +135,70 @@ export function ProgressBar({
           </View>
         ))}
       </View>
+      {onAdd ? <AddTask onAdd={onAdd} now={now ?? new Date().toISOString()} /> : null}
+    </View>
+  );
+}
+
+/** Plan a task: a name and, if known, when it is due ("10/14", "2026-10-14" or "7" days). */
+function AddTask({
+  onAdd,
+  now,
+}: {
+  onAdd: (title: string, due?: string) => Promise<void>;
+  now: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState('');
+  const [when, setWhen] = useState('');
+  const [busy, setBusy] = useState(false);
+  const due = parseWhen(when, now);
+  const whenValid = when.trim() === '' || due !== undefined;
+  if (!open)
+    return (
+      <Row>
+        <Button title="Add task" glyph="＋" kind="secondary" onPress={() => setOpen(true)} />
+      </Row>
+    );
+  return (
+    <View style={{ gap: space.sm, marginTop: space.xs }}>
+      <Field
+        label="Task"
+        value={title}
+        onChangeText={setTitle}
+        autoFocus
+        placeholder="e.g. Demolition, Rough plumbing, Tile floor & walls"
+      />
+      <Field
+        label="Due (optional) — a date like 10/14, or a number of days"
+        value={when}
+        onChangeText={setWhen}
+        placeholder="e.g. 10/14 or 7"
+      />
+      {when.trim() ? (
+        <Muted>
+          {due ? `Due ${shortDate(due)}` : 'Could not read that date — try 10/14 or 7.'}
+        </Muted>
+      ) : null}
+      <Row>
+        <Button
+          title="Add to the plan"
+          glyph="＋"
+          disabled={busy || !title.trim() || !whenValid}
+          onPress={async () => {
+            setBusy(true);
+            try {
+              await onAdd(title.trim(), due);
+              setTitle('');
+              setWhen('');
+              setOpen(false);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        />
+        <Button title="Cancel" kind="quiet" onPress={() => setOpen(false)} />
+      </Row>
     </View>
   );
 }

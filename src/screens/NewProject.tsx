@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import type { NewProject as NewProjectInput } from '../data/repository';
+import { friendlyError } from '../model/errors';
 import { addDays } from '../model/format';
 import type { EngagementMode } from '../model/types';
 import { Button, Card, Choice, Field, Muted, Row } from '../ui/primitives';
@@ -37,16 +38,19 @@ const MODES: { value: EngagementMode; label: string; glyph: string; explain: str
  */
 export function NewProject({
   needsBusiness,
+  initialBusinessName = '',
   onCreate,
   onCancel,
 }: {
   /** True for a contractor's very first project: we also need a name for their business. */
   needsBusiness: boolean;
+  /** What they typed at sign-up, if anything. */
+  initialBusinessName?: string;
   onCreate: (input: NewProjectInput, businessName?: string) => Promise<void>;
   onCancel?: () => void;
 }) {
   const styles = useStyles(makeStyles);
-  const [businessName, setBusinessName] = useState('');
+  const [businessName, setBusinessName] = useState(initialBusinessName);
   const [name, setName] = useState('');
   const [address, setAddress] = useState('');
   const [homeownerName, setHomeownerName] = useState('');
@@ -77,7 +81,7 @@ export function NewProject({
         needsBusiness ? businessName.trim() : undefined,
       );
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not create the project.');
+      setError(friendlyError(e, 'Could not create the project.'));
     } finally {
       setBusy(false);
     }

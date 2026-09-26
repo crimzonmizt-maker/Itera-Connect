@@ -35,12 +35,31 @@ applies the same visibility rules the database enforces, so what you see is what
 homeowner would see — including that Sam does not see the approval that was addressed to Dana.
 
 To run against a real backend, copy `.env.example` to `.env.local`, fill in an `https://*.supabase.co`
-URL and an `sb_publishable_*` key, and apply the files in `supabase/migrations/` in order.
-Configure `public.ic_before_user_created` as the **Before User Created** auth hook and add
-contractor addresses to `ic_approved_contractors`. `supabase/tests/run.sh` applies the migrations
+URL and an `sb_publishable_*` key, and apply the files in `supabase/migrations/` in order (or paste
+them, in order, into the Supabase SQL editor). `supabase/tests/run.sh` applies the migrations
 and runs the checks in `supabase/tests/`, which prove the rules that matter most (below) against
 a real Postgres. CI does this on every push; locally point `DATABASE_URL` at a scratch database,
 never production.
+
+### Field test
+
+The hosted web build becomes the real app when the repository variables
+`EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY` are set (GitHub →
+Settings → Secrets and variables → Actions → Variables); push to `main` and every tester opens
+the same link. In Supabase, set **Authentication → URL Configuration → Site URL** to that link so
+confirmation and password-reset e-mails come back to it.
+
+- **Anyone can sign up as a contractor** while `ic_config.open_signup` is true (the default). The
+  Before User Created hook is not needed for the field test; switch `open_signup` off and turn the
+  hook on when sign-up should be by approval again.
+- **Plans.** Every account is `free` or `pro`. Accounts follow `ic_config.default_plan` (`pro`)
+  unless set individually: `select public.ic_set_plan('someone@example.com', 'free');` in the SQL
+  editor. A Free account may own `ic_config.free_project_limit` projects (1); the database
+  refuses the next one. Only the SQL editor can change plans.
+- **Files.** Photos and PDFs (25 MB each) go in the private `ic-files` bucket under
+  `<project id>/…`. The team can open every file on its projects; a homeowner can open a file only
+  through an entry addressed to them that points at it. Files cannot be changed or deleted once
+  posted.
 
 ## How it is put together
 
@@ -66,7 +85,11 @@ Rules the code keeps:
 - **Every entry has an audience** — the member ids who may see it; empty means the business team
   only. A badge always says _who_ ("Shared with Dana, Sam"), never just "shared". A decision is
   seen by exactly the people who were asked. Homeowners cannot pick an audience: their posts go
-  to the team and every homeowner on the project.
+  to the team and every homeowner on the project. **Files follow the entry**: a photo or PDF is
+  readable by exactly the people who can see the entry it is attached to — enforced by the
+  storage rules in the database, not the screen.
+- **The role is per project.** Someone who runs a business is the contractor on its projects and a
+  homeowner on any project they were invited to (`roleOn` in `model/types.ts`).
 - **Rooms are records, not labels.** A project has rooms; items point at one (or none — a permit
   has no room). The contractor names a room however they like; the app keeps a separate `type`
   (bathroom, kitchen, …) for lookups, guessed from the name and marked as a guess until the
@@ -120,29 +143,37 @@ Rules the code keeps:
 
 ## Who owns what
 
-The contractor's **business** is the account. Projects belong to the business. Each homeowner is
-a **member of one project**, created when they redeem the invitation code the contractor gave
-them; a project can have more than one (a couple, a landlord and tenant). Sign-up is refused for
-anyone who is neither an approved contractor nor the holder of a live invitation.
+The contractor's **business** is the account. Projects belong to the business; one person owns
+one business, and a contractor sees every project of their business and nobody else's. Each
+homeowner is a **member of a project**, created when they redeem the invitation code the
+contractor gave them; a project can have more than one (a couple, a landlord and tenant), and a
+homeowner can be on several projects. During the field test anyone may sign up; otherwise sign-up
+is refused for anyone who is neither an approved contractor nor the holder of a live invitation.
 
 ## What the contractor can do today
 
-Create a business and project (mode chosen with a plain-language explanation), add and edit
-items with a live "the homeowner will see…" preview, invite homeowners, post updates to a chosen
-audience, move milestones through Start / Update / Done (an Update is its own entry — "Tile floor & walls —
-update" with the note — and leaves the milestone where it is), reschedule jobs, and act on concierge
-suggestions — including sending the reminders it drafts. The homeowner approves, replies to
-entries, and sees their own list of things to order.
+Sign up and create a business and project (mode chosen with a plain-language explanation), set
+the start and target dates, plan tasks with due dates and move them through Start / Update /
+Done (an Update is its own entry and leaves the task where it is), schedule and reschedule jobs on
+a typed date, add and edit items (model / SKU / part number, supplier, lead time) with a live "the
+homeowner will see…" preview, invite homeowners and send the invitation as a link through the
+phone's share sheet, post updates with photos and PDFs to a chosen audience and link them to an
+item, and act on concierge suggestions — including sending the reminders it drafts. The homeowner
+joins with the link or code (on any device; if Supabase asks them to confirm their e-mail first,
+the code is redeemed at their first sign-in), approves, replies to entries, sends photos and PDFs
+back, and sees their own list of things to order. Both can reset a forgotten password, sign out
+and back in, and switch between all the projects they are on.
 
 ## What is deliberately not here yet
 
 - The drawing engine and the product catalogue (they live in Itera; the catalogue needs to
   become data before it moves).
-- Photos as real uploads (the sample uses placeholder URIs; the schema has room for asset rows).
 - A language-model layer on the concierge. The rules produce the facts; a model can later
   reword them or answer free-text questions **from** them. It should never be asked to remember
   the project on its own.
-- Push notifications, e-mail delivery of invitations, payment milestones.
+- Push notifications and e-mail alerts: changes appear live while the app is open (realtime),
+  but nobody is told when it is closed. Also not yet: payment milestones, removing a member,
+  cancelling an invitation.
 - Generating the PDFs themselves (that is Itera's engine); Connect only records that one was sent.
 
 ## Relationship to Itera
